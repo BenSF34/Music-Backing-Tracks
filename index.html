@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Backing Track Generator</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: #0f0f13;
+      color: #e8e8f0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .app {
+      width: 100%;
+      max-width: 480px;
+      padding: 2rem;
+    }
+
+    h1 {
+      font-size: 1.6rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin-bottom: 0.3rem;
+      background: linear-gradient(135deg, #a78bfa, #60a5fa);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .subtitle {
+      font-size: 0.85rem;
+      color: #666;
+      margin-bottom: 2.5rem;
+    }
+
+    .card {
+      background: #1a1a24;
+      border: 1px solid #2a2a38;
+      border-radius: 16px;
+      padding: 1.8rem;
+      margin-bottom: 1rem;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+      margin-bottom: 1rem;
+    }
+
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    .field.full { grid-column: 1 / -1; }
+
+    label {
+      font-size: 0.72rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #888;
+    }
+
+    select, input[type="range"] {
+      width: 100%;
+      background: #111118;
+      border: 1px solid #2a2a38;
+      border-radius: 8px;
+      color: #e8e8f0;
+      font-size: 0.9rem;
+      padding: 0.6rem 0.75rem;
+      appearance: none;
+      cursor: pointer;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    select:focus, select:hover { border-color: #a78bfa; }
+
+    select option { background: #1a1a24; }
+
+    .bpm-row {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    input[type="range"] {
+      flex: 1;
+      padding: 0;
+      height: 4px;
+      border: none;
+      border-radius: 2px;
+      background: #2a2a38;
+      accent-color: #a78bfa;
+    }
+
+    .bpm-val {
+      font-size: 1rem;
+      font-weight: 700;
+      color: #a78bfa;
+      min-width: 2.8rem;
+      text-align: right;
+    }
+
+    .genre-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 0.5rem;
+    }
+
+    .genre-btn {
+      background: #111118;
+      border: 1px solid #2a2a38;
+      border-radius: 8px;
+      color: #aaa;
+      font-size: 0.78rem;
+      font-weight: 600;
+      padding: 0.6rem 0.25rem;
+      cursor: pointer;
+      text-align: center;
+      transition: all 0.15s;
+      text-transform: capitalize;
+    }
+
+    .genre-btn:hover { border-color: #a78bfa; color: #e8e8f0; }
+
+    .genre-btn.active {
+      background: #a78bfa22;
+      border-color: #a78bfa;
+      color: #a78bfa;
+    }
+
+    .play-btn {
+      width: 100%;
+      padding: 1rem;
+      border-radius: 12px;
+      border: none;
+      font-size: 1rem;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.6rem;
+      background: linear-gradient(135deg, #7c3aed, #3b82f6);
+      color: white;
+    }
+
+    .play-btn:hover { opacity: 0.88; transform: translateY(-1px); }
+    .play-btn:active { transform: translateY(0); }
+
+    .play-btn.playing {
+      background: linear-gradient(135deg, #dc2626, #9333ea);
+    }
+
+    .visualizer {
+      height: 48px;
+      display: flex;
+      align-items: flex-end;
+      justify-content: center;
+      gap: 3px;
+      margin-top: 1.2rem;
+    }
+
+    .bar {
+      width: 4px;
+      background: #a78bfa44;
+      border-radius: 2px;
+      height: 4px;
+      transition: height 0.1s;
+    }
+
+    .bar.active {
+      animation: bounce var(--dur, 0.6s) ease-in-out infinite alternate;
+    }
+
+    @keyframes bounce {
+      from { height: 4px; }
+      to { height: var(--h, 24px); }
+    }
+
+    .status {
+      text-align: center;
+      font-size: 0.78rem;
+      color: #555;
+      margin-top: 0.8rem;
+    }
+
+    .status.on { color: #a78bfa; }
+  </style>
+</head>
+<body>
+<div class="app">
+  <h1>Backing Track Generator</h1>
+  <p class="subtitle">Pick your settings and hit play.</p>
+
+  <div class="card">
+    <div class="row">
+      <div class="field">
+        <label>Key</label>
+        <select id="keySelect">
+          <option>C</option><option>C#</option><option>D</option>
+          <option>D#</option><option>E</option><option>F</option>
+          <option>F#</option><option>G</option><option>G#</option>
+          <option>A</option><option>A#</option><option>B</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Mode</label>
+        <select id="modeSelect">
+          <option value="major">Major</option>
+          <option value="minor">Minor</option>
+          <option value="dorian">Dorian</option>
+          <option value="mixolydian">Mixolydian</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="field" style="margin-bottom:1rem">
+      <label>Tempo — <span id="bpmLabel">90</span> BPM</label>
+      <div class="bpm-row">
+        <input type="range" id="bpmSlider" min="50" max="180" value="90" />
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Genre / Mood</label>
+      <div class="genre-grid" id="genreGrid">
+        <button class="genre-btn active" data-genre="jazz">Jazz</button>
+        <button class="genre-btn" data-genre="blues">Blues</button>
+        <button class="genre-btn" data-genre="lofi">Lo-Fi</button>
+        <button class="genre-btn" data-genre="upbeat">Upbeat</button>
+      </div>
+    </div>
+  </div>
+
+  <button class="play-btn" id="playBtn">
+    <span id="playIcon">▶</span>
+    <span id="playLabel">Play</span>
+  </button>
+
+  <div class="visualizer" id="viz"></div>
+  <div class="status" id="status">Ready</div>
+</div>
+
+<script>
+// ─── Scale definitions (intervals from root) ───────────────────────────────
+const SCALES = {
+  major:      [0,2,4,5,7,9,11],
+  minor:      [0,2,3,5,7,8,10],
+  dorian:     [0,2,3,5,7,9,10],
+  mixolydian: [0,2,4,5,7,9,10],
+};
+
+const NOTES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+
+// ─── Genre patterns ────────────────────────────────────────────────────────
+// Each genre defines: chord progression (scale degrees), rhythm pattern,
+// bass pattern, melody style, and synth settings.
+
+const GENRES = {
+  jazz: {
+    label: 'Jazz',
+    bpmDefault: 120,
+    chords: [
+      [0,2,4,6],   // I maj7
+      [3,5,0,2],   // IV maj7
+      [4,6,1,3],   // V7
+      [0,2,4,6],
+    ],
+    chordDur: '2n',
+    bassPattern: [0, null, 4, null, 3, null, 4, null],
+    bassDur: '8n',
+    melodyOctave: 5,
+    swing: true,
+  },
+  blues: {
+    label: 'Blues',
+    bpmDefault: 80,
+    chords: [
+      [0,2,4],  // I
+      [0,2,4],
+      [3,5,0],  // IV
+      [0,2,4],
+      [4,6,1],  // V
+      [3,5,0],
+      [0,2,4],
+      [4,6,1],
+    ],
+    chordDur: '2n',
+    bassPattern: [0, 0, null, 4, null, 4, null, 4],
+    bassDur: '8n',
+    melodyOctave: 4,
+    swing: true,
+  },
+  lofi: {
+    label: 'Lo-Fi',
+    bpmDefault: 75,
+    chords: [
+      [0,2,4,6], // I maj7
+      [5,0,2,4], // VI m7
+      [3,5,0,2], // IV maj7
+      [4,6,1,3], // V7
+    ],
+    chordDur: '1n',
+    bassPattern: [0, null, null, null, 4, null, null, null],
+    bassDur: '8n',
+    melodyOctave: 5,
+    swing: false,
+  },
+  upbeat: {
+    label: 'Upbeat',
+    bpmDefault: 130,
+    chords: [
+      [0,2,4],
+      [3,5,0],
+      [4,6,1],
+      [0,2,4],
+    ],
+    chordDur: '2n',
+    bassPattern: [0,null,0,null,4,null,4,null],
+    bassDur: '8n',
+    melodyOctave: 5,
+    swing: false,
+  },
+};
+
+// ─── State ─────────────────────────────────────────────────────────────────
+let playing = false;
+let genre = 'jazz';
+let currentParts = [];
+let chordSynth, bassSynth, melodySynth;
+
+// ─── DOM refs ──────────────────────────────────────────────────────────────
+const keySelect   = document.getElementById('keySelect');
+const modeSelect  = document.getElementById('modeSelect');
+const bpmSlider   = document.getElementById('bpmSlider');
+const bpmLabel    = document.getElementById('bpmLabel');
+const playBtn     = document.getElementById('playBtn');
+const playIcon    = document.getElementById('playIcon');
+const playLabel   = document.getElementById('playLabel');
+const statusEl    = document.getElementById('status');
+const vizEl       = document.getElementById('viz');
+
+// ─── Visualizer setup ──────────────────────────────────────────────────────
+const BAR_COUNT = 24;
+const bars = [];
+for (let i = 0; i < BAR_COUNT; i++) {
+  const b = document.createElement('div');
+  b.className = 'bar';
+  const h = 6 + Math.random() * 30;
+  const dur = (0.3 + Math.random() * 0.5).toFixed(2);
+  const delay = (Math.random() * 0.3).toFixed(2);
+  b.style.setProperty('--h', h + 'px');
+  b.style.setProperty('--dur', dur + 's');
+  b.style.animationDelay = delay + 's';
+  vizEl.appendChild(b);
+  bars.push(b);
+}
+
+function setViz(on) {
+  bars.forEach(b => { if (on) b.classList.add('active'); else b.classList.remove('active'); });
+}
+
+// ─── BPM slider ────────────────────────────────────────────────────────────
+bpmSlider.addEventListener('input', () => {
+  bpmLabel.textContent = bpmSlider.value;
+  if (playing) Tone.getTransport().bpm.value = +bpmSlider.value;
+});
+
+// ─── Genre buttons ─────────────────────────────────────────────────────────
+document.getElementById('genreGrid').addEventListener('click', e => {
+  const btn = e.target.closest('.genre-btn');
+  if (!btn) return;
+  document.querySelectorAll('.genre-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  genre = btn.dataset.genre;
+  const g = GENRES[genre];
+  bpmSlider.value = g.bpmDefault;
+  bpmLabel.textContent = g.bpmDefault;
+  if (playing) { stopTrack(); startTrack(); }
+});
+
+// ─── Helper: get note name ─────────────────────────────────────────────────
+function noteFromDegree(rootName, scaleIntervals, degree, octave) {
+  const rootIdx = NOTES.indexOf(rootName);
+  const interval = scaleIntervals[((degree % scaleIntervals.length) + scaleIntervals.length) % scaleIntervals.length];
+  const octaveBoost = Math.floor(degree / scaleIntervals.length);
+  const noteIdx = (rootIdx + interval) % 12;
+  return NOTES[noteIdx] + (octave + octaveBoost);
+}
+
+// ─── Build and start the track ─────────────────────────────────────────────
+async function startTrack() {
+  await Tone.start();
+
+  const g = GENRES[genre];
+  const root = keySelect.value;
+  const mode = modeSelect.value;
+  const scale = SCALES[mode];
+  const bpm = +bpmSlider.value;
+
+  Tone.getTransport().bpm.value = bpm;
+  if (g.swing) {
+    Tone.getTransport().swing = 0.5;
+    Tone.getTransport().swingSubdivision = '8n';
+  } else {
+    Tone.getTransport().swing = 0;
+  }
+
+  // ── Chord synth (PolySynth) ──
+  chordSynth = new Tone.PolySynth(Tone.Synth, {
+    oscillator: { type: 'triangle' },
+    envelope: { attack: 0.05, decay: 0.3, sustain: 0.6, release: 1.5 },
+    volume: -14,
+  }).toDestination();
+
+  // Add reverb for warmth
+  const chordVerb = new Tone.Reverb({ decay: 2.5, wet: 0.4 }).toDestination();
+  chordSynth.connect(chordVerb);
+
+  // ── Bass synth ──
+  bassSynth = new Tone.Synth({
+    oscillator: { type: 'sine' },
+    envelope: { attack: 0.02, decay: 0.2, sustain: 0.5, release: 0.8 },
+    volume: -10,
+  }).toDestination();
+
+  // ── Melody synth (subtle arpeggiated notes) ──
+  melodySynth = new Tone.Synth({
+    oscillator: { type: 'sine' },
+    envelope: { attack: 0.06, decay: 0.4, sustain: 0.3, release: 1 },
+    volume: -20,
+  });
+  const melodyVerb = new Tone.Reverb({ decay: 3, wet: 0.5 }).toDestination();
+  melodySynth.connect(melodyVerb);
+
+  // ── Build chord sequence ──
+  const chordNotes = g.chords.map(degArr =>
+    degArr.map(deg => noteFromDegree(root, scale, deg, 3))
+  );
+
+  let chordStep = 0;
+  const chordPart = new Tone.Sequence(
+    (time) => {
+      const notes = chordNotes[chordStep % chordNotes.length];
+      chordSynth.triggerAttackRelease(notes, g.chordDur, time);
+      chordStep++;
+    },
+    chordNotes.map((_, i) => i),
+    g.chordDur
+  );
+
+  // ── Build bass line ──
+  const bassNotes = g.bassPattern.map(deg =>
+    deg === null ? null : noteFromDegree(root, scale, deg, 2)
+  );
+
+  let bassStep = 0;
+  const bassPart = new Tone.Sequence(
+    (time) => {
+      const note = bassNotes[bassStep % bassNotes.length];
+      if (note) bassSynth.triggerAttackRelease(note, '16n', time);
+      bassStep++;
+    },
+    bassNotes.map((_, i) => i),
+    g.bassDur
+  );
+
+  // ── Build melody ──
+  // Simple ascending/descending arpeggiation over the current chord
+  const melodyDegrees = [0, 2, 4, 2, 4, 6, 4, 2];
+  let melStep = 0;
+  let melChordIdx = 0;
+
+  const melodyPart = new Tone.Sequence(
+    (time) => {
+      const chordIdx = Math.floor(melStep / 8) % g.chords.length;
+      const baseDegrees = g.chords[chordIdx];
+      const degree = baseDegrees[melodyDegrees[melStep % melodyDegrees.length] % baseDegrees.length];
+      const note = noteFromDegree(root, scale, degree, g.melodyOctave);
+      melodySynth.triggerAttackRelease(note, '8n', time);
+      melStep++;
+    },
+    melodyDegrees.map((_, i) => i),
+    '8n'
+  );
+
+  chordPart.loop = true;
+  bassPart.loop = true;
+  melodyPart.loop = true;
+
+  chordPart.start(0);
+  bassPart.start(0);
+  melodyPart.start(0);
+
+  currentParts = [chordPart, bassPart, melodyPart, chordVerb, melodyVerb];
+
+  Tone.getTransport().start();
+}
+
+function stopTrack() {
+  Tone.getTransport().stop();
+  Tone.getTransport().cancel();
+  currentParts.forEach(p => { try { p.stop(); p.dispose(); } catch(e){} });
+  currentParts = [];
+  if (chordSynth)  { chordSynth.dispose();  chordSynth  = null; }
+  if (bassSynth)   { bassSynth.dispose();   bassSynth   = null; }
+  if (melodySynth) { melodySynth.dispose(); melodySynth = null; }
+}
+
+// ─── Play / Stop button ────────────────────────────────────────────────────
+playBtn.addEventListener('click', async () => {
+  if (playing) {
+    stopTrack();
+    playing = false;
+    playIcon.textContent = '▶';
+    playLabel.textContent = 'Play';
+    playBtn.classList.remove('playing');
+    setViz(false);
+    statusEl.textContent = 'Stopped';
+    statusEl.className = 'status';
+  } else {
+    statusEl.textContent = 'Starting…';
+    playIcon.textContent = '⏸';
+    playLabel.textContent = 'Stop';
+    playBtn.classList.add('playing');
+    await startTrack();
+    playing = true;
+    setViz(true);
+    const g = GENRES[genre];
+    statusEl.textContent = `${g.label} · ${keySelect.value} ${modeSelect.value} · ${bpmSlider.value} BPM`;
+    statusEl.className = 'status on';
+  }
+});
+
+// Update status label when key/mode change while playing
+keySelect.addEventListener('change', () => {
+  if (playing) { stopTrack(); playing = false; playBtn.click(); }
+});
+modeSelect.addEventListener('change', () => {
+  if (playing) { stopTrack(); playing = false; playBtn.click(); }
+});
+</script>
+</body>
+</html>
