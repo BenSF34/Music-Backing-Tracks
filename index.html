@@ -28,8 +28,7 @@
     .subtitle { font-size: 0.77rem; color: var(--muted); margin-top: 0.2rem; }
     .card { background: var(--surf); border: 1px solid var(--border); border-radius: 14px; padding: 1.1rem 1.25rem; }
     .card-title { font-size: 0.6rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); margin-bottom: 0.75rem; }
-    .settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.65rem; margin-bottom: 0.75rem; }
-    .bpm-field { grid-column: 1 / -1; }
+    .settings-grid { display: grid; grid-template-columns: 1fr; gap: 0.65rem; margin-bottom: 0.75rem; }
     .field label { display: block; font-size: 0.6rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.09em; color: var(--muted); margin-bottom: 0.3rem; }
     select {
       width: 100%; background: var(--surf2); border: 1px solid var(--border);
@@ -109,15 +108,6 @@
         </select>
       </div>
       <div class="field">
-        <label>Mode</label>
-        <select id="modeSelect">
-          <option value="major">Major</option>
-          <option value="minor">Minor</option>
-          <option value="dorian">Dorian</option>
-          <option value="mixolydian">Mixolydian</option>
-        </select>
-      </div>
-      <div class="field bpm-field">
         <label>Tempo — <span id="bpmDisplay">120</span> BPM</label>
         <div class="bpm-row">
           <input type="range" id="bpmSlider" min="50" max="200" value="120">
@@ -314,7 +304,7 @@ let disposables = []; // all nodes to dispose on cleanup
 
 // ── DOM ────────────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
-const keyEl = $('keySelect'), modeEl = $('modeSelect');
+const keyEl = $('keySelect');
 const bpmSldr = $('bpmSlider'), bpmDisp = $('bpmDisplay');
 const genBtn = $('generateBtn'), playBtn = $('playBtn'), statEl = $('status');
 const songGrid = $('songGrid'), chordRow = $('chordRow'), songSource = $('songSource');
@@ -635,7 +625,6 @@ genBtn.addEventListener('click', async () => {
   disposeAll();
 
   const key    = keyEl.value;
-  const mode   = modeEl.value;
   const genre  = activeGenre;
   const song   = SONGS[genre][activeSong];
   const g      = GENRES[genre];
@@ -649,16 +638,14 @@ genBtn.addEventListener('click', async () => {
   keysBus   = reg(new Tone.Volume(g.defaultVols.keys).toDestination());
   hornsBus  = reg(new Tone.Volume(g.defaultVols.horns).toDestination());
 
-  // Drum sampler
+  // Drum sampler — use full URLs (Tone.Players doesn't support baseUrl option)
+  const DR = 'https://tonejs.github.io/audio/drum-rack/';
   drumPlayers = reg(new Tone.Players({
-    urls: {
-      kick:    'kick.mp3',
-      snare:   'snare.mp3',
-      hihat:   'hihat.mp3',
-      openhat: 'openhat.mp3',
-      rim:     'rim.mp3',
-    },
-    baseUrl: 'https://tonejs.github.io/audio/drum-rack/',
+    kick:    DR + 'kick.mp3',
+    snare:   DR + 'snare.mp3',
+    hihat:   DR + 'hihat.mp3',
+    openhat: DR + 'openhat.mp3',
+    rim:     DR + 'rim.mp3',
   }).connect(drumBus));
 
   // Piano sampler (Salamander Grand)
@@ -722,19 +709,23 @@ genBtn.addEventListener('click', async () => {
   const totalBars = prog.reduce((s,c) => s+c.b, 0);
 
   // Store state
-  genState = {key, mode, genre, song, prog, totalBars};
+  genState = {key, genre, song, prog, totalBars};
 
-  // Wait for samples
-  statEl.textContent = 'Loading samples…';
-  statEl.className = 'status loading loading-pulse';
-  genBtn.disabled = true; playBtn.disabled = true;
-
-  await Tone.loaded();
-
+  // Show chords and enable Play immediately — don't wait for samples
   renderChords(prog, song.name, key);
-  playBtn.disabled = false; genBtn.disabled = false;
-  statEl.textContent = `${g.name} · "${song.name}" · ${key} ${mode} · ${totalBars} bars — ready`;
-  statEl.className = 'status';
+  playBtn.disabled = false;
+  statEl.textContent = `${g.name} · "${song.name}" · ${key} · ${totalBars} bars — loading samples…`;
+  statEl.className = 'status loading loading-pulse';
+
+  // Load samples in background; update status when done (5s timeout safety net)
+  Promise.race([Tone.loaded(), new Promise(r => setTimeout(r, 5000))])
+    .catch(() => {})
+    .then(() => {
+      if (genState && !isPlaying) {
+        statEl.textContent = `${g.name} · "${song.name}" · ${key} · ${totalBars} bars — ready`;
+        statEl.className = 'status';
+      }
+    });
 });
 
 // ── Playback ───────────────────────────────────────────────────────────────
@@ -745,7 +736,7 @@ playBtn.addEventListener('click', async () => {
 
 async function startPlayback() {
   await Tone.start();
-  const {key, mode, genre, prog, totalBars} = genState;
+  const {key, genre, prog, totalBars} = genState;
   const g = GENRES[genre];
   const loop = totalBars + 'm';
 
@@ -795,8 +786,8 @@ async function startPlayback() {
   isPlaying = true;
   playBtn.textContent = '⏸ Stop';
   playBtn.classList.add('is-playing');
-  const {genre:g2,song,key:k,mode} = genState;
-  statEl.textContent = `Playing · ${GENRES[g2].name} · "${song.name}" · ${k} ${mode} · ${+bpmSldr.value} BPM`;
+  const {genre:g2,song,key:k} = genState;
+  statEl.textContent = `Playing · ${GENRES[g2].name} · "${song.name}" · ${k} · ${+bpmSldr.value} BPM`;
   statEl.className = 'status on';
 }
 
@@ -808,8 +799,8 @@ function stopPlayback() {
   isPlaying = false; setChip(-1);
   playBtn.textContent = '▶ Play'; playBtn.classList.remove('is-playing');
   if (genState) {
-    const {genre,song,key,mode,totalBars} = genState;
-    statEl.textContent = `${GENRES[genre].name} · "${song.name}" · ${key} ${mode} · ${totalBars} bars`;
+    const {genre,song,key,totalBars} = genState;
+    statEl.textContent = `${GENRES[genre].name} · "${song.name}" · ${key} · ${totalBars} bars`;
   }
   statEl.className = 'status';
 }
