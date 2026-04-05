@@ -1,222 +1,111 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Backing Track Generator</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #0b0b10; --surf: #12121c; --surf2: #1a1a28; --border: #232335;
+      --accent: #7c3aed; --glow: #a78bfa; --blue: #3b82f6;
+      --text: #e2e2f0; --muted: #52526a; --dim: #2e2e44;
+    }
     body {
-      font-family: 'Segoe UI', system-ui, sans-serif;
-      background: #0f0f13;
-      color: #e8e8f0;
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
+      font-family: 'Inter', system-ui, sans-serif;
+      background: var(--bg); color: var(--text);
+      min-height: 100vh; display: flex; justify-content: center;
+      padding: 2rem 1rem 5rem;
     }
-
-    .app {
-      width: 100%;
-      max-width: 480px;
-      padding: 2rem;
-    }
-
+    .app { width: 100%; max-width: 620px; display: flex; flex-direction: column; gap: 0.75rem; }
+    header { padding-bottom: 0.5rem; }
     h1 {
-      font-size: 1.6rem;
-      font-weight: 700;
-      letter-spacing: -0.02em;
-      margin-bottom: 0.3rem;
+      font-size: 1.75rem; font-weight: 800; letter-spacing: -0.04em;
       background: linear-gradient(135deg, #a78bfa, #60a5fa);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
     }
-
-    .subtitle {
-      font-size: 0.85rem;
-      color: #666;
-      margin-bottom: 2.5rem;
+    .subtitle { font-size: 0.77rem; color: var(--muted); margin-top: 0.2rem; }
+    .card { background: var(--surf); border: 1px solid var(--border); border-radius: 14px; padding: 1.1rem 1.25rem; }
+    .card-title { font-size: 0.6rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); margin-bottom: 0.75rem; }
+    .settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.65rem; margin-bottom: 0.75rem; }
+    .bpm-field { grid-column: 1 / -1; }
+    .field label { display: block; font-size: 0.6rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.09em; color: var(--muted); margin-bottom: 0.3rem; }
+    select {
+      width: 100%; background: var(--surf2); border: 1px solid var(--border);
+      border-radius: 8px; color: var(--text); font-size: 0.875rem;
+      padding: 0.46rem 0.6rem; appearance: none; outline: none; cursor: pointer;
+      transition: border-color 0.15s;
     }
-
-    .card {
-      background: #1a1a24;
-      border: 1px solid #2a2a38;
-      border-radius: 16px;
-      padding: 1.8rem;
-      margin-bottom: 1rem;
+    select:hover, select:focus { border-color: var(--accent); }
+    select option { background: var(--surf); }
+    .bpm-row { display: flex; align-items: center; gap: 0.7rem; }
+    input[type=range] {
+      -webkit-appearance: none; flex: 1; height: 3px;
+      background: var(--border); border-radius: 2px; outline: none; cursor: pointer;
     }
-
-    .row {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 1rem;
-      margin-bottom: 1rem;
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none; width: 13px; height: 13px;
+      border-radius: 50%; background: var(--glow); cursor: pointer;
     }
-
-    .field {
-      display: flex;
-      flex-direction: column;
-      gap: 0.5rem;
-    }
-
-    .field.full { grid-column: 1 / -1; }
-
-    label {
-      font-size: 0.72rem;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      color: #888;
-    }
-
-    select, input[type="range"] {
-      width: 100%;
-      background: #111118;
-      border: 1px solid #2a2a38;
-      border-radius: 8px;
-      color: #e8e8f0;
-      font-size: 0.9rem;
-      padding: 0.6rem 0.75rem;
-      appearance: none;
-      cursor: pointer;
-      outline: none;
-      transition: border-color 0.2s;
-    }
-
-    select:focus, select:hover { border-color: #a78bfa; }
-
-    select option { background: #1a1a24; }
-
-    .bpm-row {
-      display: flex;
-      align-items: center;
-      gap: 0.75rem;
-    }
-
-    input[type="range"] {
-      flex: 1;
-      padding: 0;
-      height: 4px;
-      border: none;
-      border-radius: 2px;
-      background: #2a2a38;
-      accent-color: #a78bfa;
-    }
-
-    .bpm-val {
-      font-size: 1rem;
-      font-weight: 700;
-      color: #a78bfa;
-      min-width: 2.8rem;
-      text-align: right;
-    }
-
-    .genre-grid {
-      display: grid;
-      grid-template-columns: repeat(4, 1fr);
-      gap: 0.5rem;
-    }
-
-    .genre-btn {
-      background: #111118;
-      border: 1px solid #2a2a38;
-      border-radius: 8px;
-      color: #aaa;
-      font-size: 0.78rem;
-      font-weight: 600;
-      padding: 0.6rem 0.25rem;
-      cursor: pointer;
-      text-align: center;
-      transition: all 0.15s;
-      text-transform: capitalize;
-    }
-
-    .genre-btn:hover { border-color: #a78bfa; color: #e8e8f0; }
-
-    .genre-btn.active {
-      background: #a78bfa22;
-      border-color: #a78bfa;
-      color: #a78bfa;
-    }
-
-    .play-btn {
-      width: 100%;
-      padding: 1rem;
-      border-radius: 12px;
-      border: none;
-      font-size: 1rem;
-      font-weight: 700;
-      letter-spacing: 0.02em;
-      cursor: pointer;
-      transition: all 0.2s;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 0.6rem;
-      background: linear-gradient(135deg, #7c3aed, #3b82f6);
-      color: white;
-    }
-
-    .play-btn:hover { opacity: 0.88; transform: translateY(-1px); }
-    .play-btn:active { transform: translateY(0); }
-
-    .play-btn.playing {
-      background: linear-gradient(135deg, #dc2626, #9333ea);
-    }
-
-    .visualizer {
-      height: 48px;
-      display: flex;
-      align-items: flex-end;
-      justify-content: center;
-      gap: 3px;
-      margin-top: 1.2rem;
-    }
-
-    .bar {
-      width: 4px;
-      background: #a78bfa44;
-      border-radius: 2px;
-      height: 4px;
-      transition: height 0.1s;
-    }
-
-    .bar.active {
-      animation: bounce var(--dur, 0.6s) ease-in-out infinite alternate;
-    }
-
-    @keyframes bounce {
-      from { height: 4px; }
-      to { height: var(--h, 24px); }
-    }
-
-    .status {
-      text-align: center;
-      font-size: 0.78rem;
-      color: #555;
-      margin-top: 0.8rem;
-    }
-
-    .status.on { color: #a78bfa; }
+    .bpm-num { font-size: 1rem; font-weight: 700; color: var(--glow); min-width: 2.5rem; text-align: right; font-variant-numeric: tabular-nums; }
+    .genre-row { display: flex; flex-wrap: wrap; gap: 0.38rem; margin-bottom: 0.85rem; }
+    .genre-btn { background: var(--surf2); border: 1px solid var(--border); border-radius: 6px; color: var(--muted); font-size: 0.73rem; font-weight: 600; padding: 0.38rem 0.72rem; cursor: pointer; transition: all 0.13s; }
+    .genre-btn:hover { border-color: var(--accent); color: var(--text); }
+    .genre-btn.active { background: rgba(124,58,237,0.16); border-color: var(--accent); color: var(--glow); }
+    .picker-sep { height: 1px; background: var(--border); margin: 0.75rem 0; }
+    .picker-label { font-size: 0.6rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); margin-bottom: 0.5rem; }
+    .song-grid { display: flex; flex-direction: column; gap: 0.3rem; }
+    .song-btn { background: transparent; border: 1px solid transparent; border-radius: 7px; color: var(--muted); font-size: 0.8rem; font-weight: 500; padding: 0.38rem 0.65rem; cursor: pointer; text-align: left; transition: all 0.13s; }
+    .song-btn:hover { border-color: var(--dim); color: var(--text); }
+    .song-btn.active { background: rgba(124,58,237,0.12); border-color: var(--accent); color: var(--glow); font-weight: 600; }
+    /* Chord row */
+    .song-source { font-size: 0.72rem; color: var(--muted); margin-bottom: 0.55rem; font-style: italic; }
+    .chord-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.32rem; min-height: 56px; }
+    .chord-ph { font-size: 0.78rem; color: var(--muted); font-style: italic; }
+    .chord-chip { display: flex; flex-direction: column; align-items: center; background: var(--surf2); border: 1px solid var(--border); border-radius: 8px; padding: 0.42rem 0.7rem; min-width: 48px; transition: background 0.08s, border-color 0.08s, box-shadow 0.08s, color 0.08s; }
+    .cc-name { font-size: 0.85rem; font-weight: 700; line-height: 1.1; }
+    .cc-bars { font-size: 0.54rem; color: var(--muted); margin-top: 0.18rem; font-weight: 500; }
+    .chord-chip.playing { background: rgba(167,139,250,0.13); border-color: var(--glow); color: var(--glow); box-shadow: 0 0 12px rgba(167,139,250,0.2); }
+    .chord-sep { font-size: 0.62rem; color: var(--border); user-select: none; }
+    /* Mixer */
+    .mixer-rows { display: flex; flex-direction: column; gap: 0.55rem; }
+    .mixer-track { display: grid; grid-template-columns: 80px 1fr 52px; align-items: center; gap: 0.6rem; }
+    .mixer-label { display: flex; align-items: center; gap: 0.35rem; font-size: 0.78rem; font-weight: 600; }
+    .mix-icon { font-size: 0.82rem; }
+    .mixer-val { font-size: 0.62rem; color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+    /* Transport */
+    .transport { display: grid; grid-template-columns: 1fr 2fr; gap: 0.7rem; }
+    .btn { display: flex; align-items: center; justify-content: center; gap: 0.45rem; padding: 0.8rem 1.25rem; border-radius: 10px; border: none; font-size: 0.88rem; font-weight: 700; cursor: pointer; transition: all 0.13s; letter-spacing: 0.01em; }
+    .btn:disabled { opacity: 0.28; cursor: not-allowed; transform: none !important; }
+    .btn-gen { background: var(--surf2); border: 1px solid var(--border); color: var(--text); }
+    .btn-gen:not(:disabled):hover { border-color: var(--accent); color: var(--glow); }
+    .btn-play { background: linear-gradient(135deg, #7c3aed, #3b82f6); color: #fff; }
+    .btn-play:not(:disabled):hover { opacity: 0.84; transform: translateY(-1px); }
+    .btn-play.is-playing { background: linear-gradient(135deg, #dc2626, #9333ea); }
+    .status { text-align: center; font-size: 0.72rem; color: var(--muted); padding: 0.25rem; }
+    .status.on { color: var(--glow); }
+    .status.loading { color: #facc15; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+    .loading-pulse { animation: pulse 1.2s ease-in-out infinite; }
   </style>
 </head>
 <body>
 <div class="app">
-  <h1>Backing Track Generator</h1>
-  <p class="subtitle">Pick your settings and hit play.</p>
+  <header>
+    <h1>Backing Track</h1>
+    <p class="subtitle">Pick a genre, choose a song inspiration, generate, play.</p>
+  </header>
 
   <div class="card">
-    <div class="row">
+    <div class="card-title">Settings</div>
+    <div class="settings-grid">
       <div class="field">
         <label>Key</label>
         <select id="keySelect">
-          <option>C</option><option>C#</option><option>D</option>
-          <option>D#</option><option>E</option><option>F</option>
-          <option>F#</option><option>G</option><option>G#</option>
-          <option>A</option><option>A#</option><option>B</option>
+          <option>C</option><option>C#</option><option>D</option><option>D#</option>
+          <option>E</option><option>F</option><option>F#</option><option>G</option>
+          <option>G#</option><option>A</option><option>A#</option><option>B</option>
         </select>
       </div>
       <div class="field">
@@ -228,333 +117,705 @@
           <option value="mixolydian">Mixolydian</option>
         </select>
       </div>
-    </div>
-
-    <div class="field" style="margin-bottom:1rem">
-      <label>Tempo — <span id="bpmLabel">90</span> BPM</label>
-      <div class="bpm-row">
-        <input type="range" id="bpmSlider" min="50" max="180" value="90" />
+      <div class="field bpm-field">
+        <label>Tempo — <span id="bpmDisplay">120</span> BPM</label>
+        <div class="bpm-row">
+          <input type="range" id="bpmSlider" min="50" max="200" value="120">
+        </div>
       </div>
     </div>
+    <div class="genre-row" id="genreGrid">
+      <button class="genre-btn active" data-genre="jazz">Jazz</button>
+      <button class="genre-btn" data-genre="blues">Blues</button>
+      <button class="genre-btn" data-genre="rock">Rock</button>
+      <button class="genre-btn" data-genre="jamband">Jam Band</button>
+      <button class="genre-btn" data-genre="reggae">Reggae</button>
+    </div>
+    <div class="picker-sep"></div>
+    <div class="picker-label">Song inspiration</div>
+    <div class="song-grid" id="songGrid"></div>
+  </div>
 
-    <div class="field">
-      <label>Genre / Mood</label>
-      <div class="genre-grid" id="genreGrid">
-        <button class="genre-btn active" data-genre="jazz">Jazz</button>
-        <button class="genre-btn" data-genre="blues">Blues</button>
-        <button class="genre-btn" data-genre="lofi">Lo-Fi</button>
-        <button class="genre-btn" data-genre="upbeat">Upbeat</button>
+  <div class="card">
+    <div class="card-title">Chord Progression</div>
+    <div class="song-source" id="songSource"></div>
+    <div class="chord-row" id="chordRow">
+      <span class="chord-ph">Select a song above and click Generate</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Mixer</div>
+    <div class="mixer-rows">
+      <div class="mixer-track">
+        <div class="mixer-label"><span class="mix-icon">🥁</span>Drums</div>
+        <input type="range" id="drumVol" min="-40" max="0" step="1" value="-10">
+        <span class="mixer-val" id="drumVolVal">-10 dB</span>
+      </div>
+      <div class="mixer-track">
+        <div class="mixer-label"><span class="mix-icon">🎸</span>Bass</div>
+        <input type="range" id="bassVol" min="-40" max="0" step="1" value="-14">
+        <span class="mixer-val" id="bassVolVal">-14 dB</span>
+      </div>
+      <div class="mixer-track">
+        <div class="mixer-label"><span class="mix-icon">🎵</span>Guitar</div>
+        <input type="range" id="guitarVol" min="-40" max="0" step="1" value="-16">
+        <span class="mixer-val" id="guitarVolVal">-16 dB</span>
+      </div>
+      <div class="mixer-track">
+        <div class="mixer-label"><span class="mix-icon">🎹</span>Keys</div>
+        <input type="range" id="keysVol" min="-40" max="0" step="1" value="-16">
+        <span class="mixer-val" id="keysVolVal">-16 dB</span>
+      </div>
+      <div class="mixer-track">
+        <div class="mixer-label"><span class="mix-icon">🎺</span>Horns</div>
+        <input type="range" id="hornsVol" min="-40" max="0" step="1" value="-20">
+        <span class="mixer-val" id="hornsVolVal">-20 dB</span>
       </div>
     </div>
   </div>
 
-  <button class="play-btn" id="playBtn">
-    <span id="playIcon">▶</span>
-    <span id="playLabel">Play</span>
-  </button>
-
-  <div class="visualizer" id="viz"></div>
-  <div class="status" id="status">Ready</div>
+  <div class="transport">
+    <button class="btn btn-gen" id="generateBtn">⚙ Generate</button>
+    <button class="btn btn-play" id="playBtn" disabled>▶ Play</button>
+  </div>
+  <div class="status" id="status">Select a song and click Generate</div>
 </div>
-
 <script>
-// ─── Scale definitions (intervals from root) ───────────────────────────────
+// ── Constants ──────────────────────────────────────────────────────────────
+const NOTES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
 const SCALES = {
   major:      [0,2,4,5,7,9,11],
   minor:      [0,2,3,5,7,8,10],
   dorian:     [0,2,3,5,7,9,10],
   mixolydian: [0,2,4,5,7,9,10],
 };
+const CI = { // chord intervals
+  maj:[0,4,7], min:[0,3,7], power:[0,7,12],
+  dom7:[0,4,7,10], maj7:[0,4,7,11], min7:[0,3,7,10],
+  dom9:[0,4,7,10,14], maj9:[0,4,7,11,14], min11:[0,3,7,10,14,17],
+};
+const CSX = { // chord name suffixes
+  maj:'', min:'m', power:'5',
+  dom7:'7', maj7:'maj7', min7:'m7',
+  dom9:'9', maj9:'maj9', min11:'m11',
+};
 
-const NOTES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+// ── Song data ──────────────────────────────────────────────────────────────
+// Each chord: {st: semitones from root, t: chord type, b: bars}
+const SONGS = {
+  jazz: [
+    { name: 'Autumn Leaves',
+      prog: [{st:2,t:'min7',b:1},{st:7,t:'dom7',b:1},{st:0,t:'maj7',b:1},{st:5,t:'maj7',b:1},
+             {st:11,t:'min7',b:1},{st:4,t:'dom7',b:1},{st:9,t:'min7',b:2}] },
+    { name: 'Fly Me to the Moon',
+      prog: [{st:9,t:'min7',b:2},{st:2,t:'min7',b:2},{st:7,t:'dom7',b:2},{st:0,t:'maj7',b:2}] },
+    { name: 'So What',
+      prog: [{st:2,t:'min7',b:8},{st:3,t:'min7',b:4},{st:2,t:'min7',b:4}] },
+    { name: 'Blue Bossa',
+      prog: [{st:0,t:'min7',b:2},{st:2,t:'min7',b:1},{st:7,t:'dom7',b:1},
+             {st:0,t:'min7',b:2},{st:1,t:'maj7',b:2}] },
+    { name: 'There Will Never Be Another You',
+      prog: [{st:0,t:'maj7',b:2},{st:9,t:'min7',b:2},{st:2,t:'min7',b:2},{st:7,t:'dom7',b:2}] },
+  ],
+  blues: [
+    { name: 'The Thrill is Gone',
+      prog: [{st:0,t:'min7',b:4},{st:5,t:'min7',b:2},{st:0,t:'min7',b:2},
+             {st:7,t:'min7',b:1},{st:5,t:'min7',b:1},{st:0,t:'min7',b:1},{st:7,t:'dom7',b:1}] },
+    { name: 'Pride and Joy',
+      prog: [{st:0,t:'dom7',b:4},{st:5,t:'dom7',b:2},{st:0,t:'dom7',b:2},
+             {st:7,t:'dom7',b:1},{st:5,t:'dom7',b:1},{st:0,t:'dom7',b:1},{st:7,t:'dom7',b:1}] },
+    { name: 'Sweet Home Chicago',
+      prog: [{st:0,t:'dom7',b:1},{st:5,t:'dom7',b:1},{st:0,t:'dom7',b:2},{st:5,t:'dom7',b:2},
+             {st:0,t:'dom7',b:2},{st:7,t:'dom7',b:1},{st:5,t:'dom7',b:1},{st:0,t:'dom7',b:2}] },
+    { name: 'Stormy Monday',
+      prog: [{st:0,t:'dom9',b:2},{st:2,t:'dom7',b:2},{st:3,t:'dom7',b:2},{st:5,t:'dom9',b:2}] },
+    { name: 'Crossroads',
+      prog: [{st:0,t:'dom7',b:2},{st:5,t:'dom7',b:2},{st:0,t:'dom7',b:2},
+             {st:7,t:'dom7',b:1},{st:5,t:'dom7',b:1},{st:0,t:'dom7',b:2}] },
+  ],
+  rock: [
+    { name: "(I Can't Get No) Satisfaction",
+      prog: [{st:0,t:'power',b:4},{st:5,t:'power',b:4}] },
+    { name: 'Brown Eyed Girl',
+      prog: [{st:0,t:'maj',b:2},{st:5,t:'maj',b:2},{st:0,t:'maj',b:2},{st:7,t:'maj',b:2}] },
+    { name: 'La Grange',
+      prog: [{st:0,t:'dom7',b:4},{st:5,t:'dom7',b:2},{st:0,t:'dom7',b:2},
+             {st:7,t:'dom7',b:1},{st:5,t:'dom7',b:1},{st:0,t:'dom7',b:2}] },
+    { name: 'Johnny B. Goode',
+      prog: [{st:0,t:'power',b:4},{st:5,t:'power',b:2},{st:0,t:'power',b:2},
+             {st:7,t:'power',b:1},{st:5,t:'power',b:1},{st:0,t:'power',b:2}] },
+    { name: 'Should I Stay or Should I Go',
+      prog: [{st:0,t:'maj',b:2},{st:3,t:'maj',b:1},{st:5,t:'maj',b:1},
+             {st:0,t:'maj',b:2},{st:3,t:'maj',b:1},{st:5,t:'maj',b:1}] },
+  ],
+  jamband: [
+    { name: "Franklin's Tower",
+      prog: [{st:0,t:'maj',b:4},{st:2,t:'maj',b:4}] },
+    { name: 'Fire on the Mountain',
+      prog: [{st:2,t:'min',b:4},{st:0,t:'maj',b:4}] },
+    { name: 'Superstition',
+      prog: [{st:0,t:'min7',b:6},{st:10,t:'dom9',b:2}] },
+    { name: 'What is Hip',
+      prog: [{st:0,t:'min7',b:4},{st:5,t:'dom7',b:2},{st:0,t:'min7',b:2}] },
+    { name: 'Scarlet Begonias',
+      prog: [{st:0,t:'maj',b:2},{st:7,t:'maj',b:2},{st:5,t:'maj',b:2},{st:2,t:'maj',b:2}] },
+  ],
+  reggae: [
+    { name: 'No Woman No Cry',
+      prog: [{st:0,t:'maj',b:2},{st:7,t:'maj',b:2},{st:5,t:'maj',b:2},{st:0,t:'maj',b:2}] },
+    { name: 'The Harder They Come',
+      prog: [{st:0,t:'maj',b:2},{st:5,t:'maj',b:2},{st:7,t:'maj',b:2},{st:5,t:'maj',b:2}] },
+    { name: 'Pressure Drop',
+      prog: [{st:0,t:'maj',b:4},{st:5,t:'maj',b:2},{st:7,t:'maj',b:2}] },
+    { name: 'Rivers of Babylon',
+      prog: [{st:0,t:'maj7',b:4},{st:7,t:'maj',b:2},{st:5,t:'maj7',b:2}] },
+    { name: 'Red Red Wine',
+      prog: [{st:0,t:'maj',b:2},{st:10,t:'maj',b:2},{st:5,t:'maj',b:2},{st:0,t:'maj',b:2}] },
+  ],
+};
 
-// ─── Genre patterns ────────────────────────────────────────────────────────
-// Each genre defines: chord progression (scale degrees), rhythm pattern,
-// bass pattern, melody style, and synth settings.
-
+// ── Genre configs ──────────────────────────────────────────────────────────
 const GENRES = {
   jazz: {
-    label: 'Jazz',
-    bpmDefault: 120,
-    chords: [
-      [0,2,4,6],   // I maj7
-      [3,5,0,2],   // IV maj7
-      [4,6,1,3],   // V7
-      [0,2,4,6],
-    ],
-    chordDur: '2n',
-    bassPattern: [0, null, 4, null, 3, null, 4, null],
-    bassDur: '8n',
-    melodyOctave: 5,
-    swing: true,
+    name:'Jazz', bpm:120, swing:0.5,
+    drums:{ kick:[1,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0], snare:[0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0], hihat:[1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0], open:[0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0] },
+    defaultVols:{ drums:-10, bass:-14, guitar:-28, keys:-14, horns:-12 },
   },
   blues: {
-    label: 'Blues',
-    bpmDefault: 80,
-    chords: [
-      [0,2,4],  // I
-      [0,2,4],
-      [3,5,0],  // IV
-      [0,2,4],
-      [4,6,1],  // V
-      [3,5,0],
-      [0,2,4],
-      [4,6,1],
-    ],
-    chordDur: '2n',
-    bassPattern: [0, 0, null, 4, null, 4, null, 4],
-    bassDur: '8n',
-    melodyOctave: 4,
-    swing: true,
+    name:'Blues', bpm:80, swing:0.5,
+    drums:{ kick:[1,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0], snare:[0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0], hihat:[1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0], open:[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0] },
+    defaultVols:{ drums:-10, bass:-14, guitar:-14, keys:-16, horns:-14 },
   },
-  lofi: {
-    label: 'Lo-Fi',
-    bpmDefault: 75,
-    chords: [
-      [0,2,4,6], // I maj7
-      [5,0,2,4], // VI m7
-      [3,5,0,2], // IV maj7
-      [4,6,1,3], // V7
-    ],
-    chordDur: '1n',
-    bassPattern: [0, null, null, null, 4, null, null, null],
-    bassDur: '8n',
-    melodyOctave: 5,
-    swing: false,
+  rock: {
+    name:'Rock', bpm:120, swing:0,
+    drums:{ kick:[1,0,0,0,0,0,1,0,1,0,0,0,0,0,0,0], snare:[0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0], hihat:[1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0], open:[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0] },
+    defaultVols:{ drums:-8, bass:-12, guitar:-10, keys:-28, horns:-34 },
   },
-  upbeat: {
-    label: 'Upbeat',
-    bpmDefault: 130,
-    chords: [
-      [0,2,4],
-      [3,5,0],
-      [4,6,1],
-      [0,2,4],
-    ],
-    chordDur: '2n',
-    bassPattern: [0,null,0,null,4,null,4,null],
-    bassDur: '8n',
-    melodyOctave: 5,
-    swing: false,
+  jamband: {
+    name:'Jam Band', bpm:95, swing:0.15,
+    drums:{ kick:[1,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0], snare:[0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0], hihat:[1,0,1,0,0,0,1,0,1,0,0,0,0,0,1,0], open:[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0] },
+    defaultVols:{ drums:-12, bass:-14, guitar:-16, keys:-14, horns:-32 },
+  },
+  reggae: {
+    name:'Reggae', bpm:88, swing:0,
+    drums:{ kick:[0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0], snare:[0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0], hihat:[0,0,1,0,0,0,1,0,0,0,1,0,0,0,1,0], open:[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0] },
+    defaultVols:{ drums:-10, bass:-12, guitar:-12, keys:-26, horns:-36 },
   },
 };
 
-// ─── State ─────────────────────────────────────────────────────────────────
-let playing = false;
-let genre = 'jazz';
-let currentParts = [];
-let chordSynth, bassSynth, melodySynth;
+// ── State ──────────────────────────────────────────────────────────────────
+let activeGenre = 'jazz', activeSong = 0, genState = null, isPlaying = false;
+let drumBus, bassBus, guitarBus, keysBus, hornsBus;
+let drumPlayers = null, pianoSampler = null;
+let bassSynth = null, guitarSynth = null, hornsSynth = null;
+let drumSeqs = [], bassPart = null, guitarPart = null, keysPart = null, hornsPart = null, hlPart = null;
+let disposables = []; // all nodes to dispose on cleanup
 
-// ─── DOM refs ──────────────────────────────────────────────────────────────
-const keySelect   = document.getElementById('keySelect');
-const modeSelect  = document.getElementById('modeSelect');
-const bpmSlider   = document.getElementById('bpmSlider');
-const bpmLabel    = document.getElementById('bpmLabel');
-const playBtn     = document.getElementById('playBtn');
-const playIcon    = document.getElementById('playIcon');
-const playLabel   = document.getElementById('playLabel');
-const statusEl    = document.getElementById('status');
-const vizEl       = document.getElementById('viz');
+// ── DOM ────────────────────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+const keyEl = $('keySelect'), modeEl = $('modeSelect');
+const bpmSldr = $('bpmSlider'), bpmDisp = $('bpmDisplay');
+const genBtn = $('generateBtn'), playBtn = $('playBtn'), statEl = $('status');
+const songGrid = $('songGrid'), chordRow = $('chordRow'), songSource = $('songSource');
 
-// ─── Visualizer setup ──────────────────────────────────────────────────────
-const BAR_COUNT = 24;
-const bars = [];
-for (let i = 0; i < BAR_COUNT; i++) {
-  const b = document.createElement('div');
-  b.className = 'bar';
-  const h = 6 + Math.random() * 30;
-  const dur = (0.3 + Math.random() * 0.5).toFixed(2);
-  const delay = (Math.random() * 0.3).toFixed(2);
-  b.style.setProperty('--h', h + 'px');
-  b.style.setProperty('--dur', dur + 's');
-  b.style.animationDelay = delay + 's';
-  vizEl.appendChild(b);
-  bars.push(b);
-}
-
-function setViz(on) {
-  bars.forEach(b => { if (on) b.classList.add('active'); else b.classList.remove('active'); });
-}
-
-// ─── BPM slider ────────────────────────────────────────────────────────────
-bpmSlider.addEventListener('input', () => {
-  bpmLabel.textContent = bpmSlider.value;
-  if (playing) Tone.getTransport().bpm.value = +bpmSlider.value;
+// ── BPM ────────────────────────────────────────────────────────────────────
+bpmSldr.addEventListener('input', () => {
+  bpmDisp.textContent = bpmSldr.value;
+  if (isPlaying) Tone.getTransport().bpm.rampTo(+bpmSldr.value, 0.1);
 });
 
-// ─── Genre buttons ─────────────────────────────────────────────────────────
-document.getElementById('genreGrid').addEventListener('click', e => {
+// ── Genre buttons ──────────────────────────────────────────────────────────
+$('genreGrid').addEventListener('click', e => {
   const btn = e.target.closest('.genre-btn');
   if (!btn) return;
   document.querySelectorAll('.genre-btn').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
-  genre = btn.dataset.genre;
-  const g = GENRES[genre];
-  bpmSlider.value = g.bpmDefault;
-  bpmLabel.textContent = g.bpmDefault;
-  if (playing) { stopTrack(); startTrack(); }
+  activeGenre = btn.dataset.genre;
+  activeSong = 0;
+  bpmSldr.value = GENRES[activeGenre].bpm;
+  bpmDisp.textContent = bpmSldr.value;
+  renderSongPicker(activeGenre);
 });
 
-// ─── Helper: get note name ─────────────────────────────────────────────────
-function noteFromDegree(rootName, scaleIntervals, degree, octave) {
-  const rootIdx = NOTES.indexOf(rootName);
-  const interval = scaleIntervals[((degree % scaleIntervals.length) + scaleIntervals.length) % scaleIntervals.length];
-  const octaveBoost = Math.floor(degree / scaleIntervals.length);
-  const noteIdx = (rootIdx + interval) % 12;
-  return NOTES[noteIdx] + (octave + octaveBoost);
-}
-
-// ─── Build and start the track ─────────────────────────────────────────────
-async function startTrack() {
-  await Tone.start();
-
-  const g = GENRES[genre];
-  const root = keySelect.value;
-  const mode = modeSelect.value;
-  const scale = SCALES[mode];
-  const bpm = +bpmSlider.value;
-
-  Tone.getTransport().bpm.value = bpm;
-  if (g.swing) {
-    Tone.getTransport().swing = 0.5;
-    Tone.getTransport().swingSubdivision = '8n';
-  } else {
-    Tone.getTransport().swing = 0;
-  }
-
-  // ── Chord synth (PolySynth) ──
-  chordSynth = new Tone.PolySynth(Tone.Synth, {
-    oscillator: { type: 'triangle' },
-    envelope: { attack: 0.05, decay: 0.3, sustain: 0.6, release: 1.5 },
-    volume: -14,
-  }).toDestination();
-
-  // Add reverb for warmth
-  const chordVerb = new Tone.Reverb({ decay: 2.5, wet: 0.4 }).toDestination();
-  chordSynth.connect(chordVerb);
-
-  // ── Bass synth ──
-  bassSynth = new Tone.Synth({
-    oscillator: { type: 'sine' },
-    envelope: { attack: 0.02, decay: 0.2, sustain: 0.5, release: 0.8 },
-    volume: -10,
-  }).toDestination();
-
-  // ── Melody synth (subtle arpeggiated notes) ──
-  melodySynth = new Tone.Synth({
-    oscillator: { type: 'sine' },
-    envelope: { attack: 0.06, decay: 0.4, sustain: 0.3, release: 1 },
-    volume: -20,
+function renderSongPicker(genre) {
+  songGrid.innerHTML = '';
+  SONGS[genre].forEach((song, i) => {
+    const btn = document.createElement('button');
+    btn.className = 'song-btn' + (i === activeSong ? ' active' : '');
+    btn.textContent = song.name;
+    btn.dataset.idx = i;
+    songGrid.appendChild(btn);
   });
-  const melodyVerb = new Tone.Reverb({ decay: 3, wet: 0.5 }).toDestination();
-  melodySynth.connect(melodyVerb);
-
-  // ── Build chord sequence ──
-  const chordNotes = g.chords.map(degArr =>
-    degArr.map(deg => noteFromDegree(root, scale, deg, 3))
-  );
-
-  let chordStep = 0;
-  const chordPart = new Tone.Sequence(
-    (time) => {
-      const notes = chordNotes[chordStep % chordNotes.length];
-      chordSynth.triggerAttackRelease(notes, g.chordDur, time);
-      chordStep++;
-    },
-    chordNotes.map((_, i) => i),
-    g.chordDur
-  );
-
-  // ── Build bass line ──
-  const bassNotes = g.bassPattern.map(deg =>
-    deg === null ? null : noteFromDegree(root, scale, deg, 2)
-  );
-
-  let bassStep = 0;
-  const bassPart = new Tone.Sequence(
-    (time) => {
-      const note = bassNotes[bassStep % bassNotes.length];
-      if (note) bassSynth.triggerAttackRelease(note, '16n', time);
-      bassStep++;
-    },
-    bassNotes.map((_, i) => i),
-    g.bassDur
-  );
-
-  // ── Build melody ──
-  // Simple ascending/descending arpeggiation over the current chord
-  const melodyDegrees = [0, 2, 4, 2, 4, 6, 4, 2];
-  let melStep = 0;
-  let melChordIdx = 0;
-
-  const melodyPart = new Tone.Sequence(
-    (time) => {
-      const chordIdx = Math.floor(melStep / 8) % g.chords.length;
-      const baseDegrees = g.chords[chordIdx];
-      const degree = baseDegrees[melodyDegrees[melStep % melodyDegrees.length] % baseDegrees.length];
-      const note = noteFromDegree(root, scale, degree, g.melodyOctave);
-      melodySynth.triggerAttackRelease(note, '8n', time);
-      melStep++;
-    },
-    melodyDegrees.map((_, i) => i),
-    '8n'
-  );
-
-  chordPart.loop = true;
-  bassPart.loop = true;
-  melodyPart.loop = true;
-
-  chordPart.start(0);
-  bassPart.start(0);
-  melodyPart.start(0);
-
-  currentParts = [chordPart, bassPart, melodyPart, chordVerb, melodyVerb];
-
-  Tone.getTransport().start();
 }
 
-function stopTrack() {
+songGrid.addEventListener('click', e => {
+  const btn = e.target.closest('.song-btn');
+  if (!btn) return;
+  document.querySelectorAll('.song-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  activeSong = +btn.dataset.idx;
+});
+
+// ── Mixer sliders ──────────────────────────────────────────────────────────
+function hookSlider(id, valId, getBus) {
+  const sl = $(id), vl = $(valId);
+  sl.addEventListener('input', () => {
+    const db = +sl.value;
+    vl.textContent = db + ' dB';
+    const b = getBus();
+    if (b) b.volume.value = db <= -40 ? -Infinity : db;
+  });
+}
+hookSlider('drumVol',   'drumVolVal',   () => drumBus);
+hookSlider('bassVol',   'bassVolVal',   () => bassBus);
+hookSlider('guitarVol', 'guitarVolVal', () => guitarBus);
+hookSlider('keysVol',   'keysVolVal',   () => keysBus);
+hookSlider('hornsVol',  'hornsVolVal',  () => hornsBus);
+
+function applyGenreVolumes(genre) {
+  const dv = GENRES[genre].defaultVols;
+  const pairs = [['drumVol','drumVolVal',dv.drums],['bassVol','bassVolVal',dv.bass],
+                 ['guitarVol','guitarVolVal',dv.guitar],['keysVol','keysVolVal',dv.keys],
+                 ['hornsVol','hornsVolVal',dv.horns]];
+  pairs.forEach(([id, vid, val]) => {
+    $(id).value = val;
+    $(vid).textContent = val + ' dB';
+  });
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+function midi2note(m) { return Tone.Frequency(m,'midi').toNote(); }
+function stMidi(keyNote, semitones, octave) {
+  return Tone.Frequency(keyNote + String(octave)).toMidi() + semitones;
+}
+function noteAtSt(keyNote, semitones) {
+  return NOTES[(NOTES.indexOf(keyNote) + semitones + 120) % 12];
+}
+function buildCNotes(rootMidi, type, lim) {
+  return CI[type].slice(0, lim).map(i => midi2note(rootMidi + i));
+}
+function p(bar, beat, s16 = 0) { return `${bar}:${beat}:${s16}`; }
+
+// ── Event builders ─────────────────────────────────────────────────────────
+function buildBass(prog, genre, key) {
+  const ev = [];
+  let bar = 0;
+  prog.forEach((c, ci) => {
+    const root  = stMidi(key, c.st, 2);
+    const fifth = root + 7;
+    const next  = stMidi(key, prog[(ci+1)%prog.length].st, 2);
+    for (let b = 0; b < c.b; b++) {
+      const last = b === c.b - 1;
+      switch (genre) {
+        case 'jazz': {
+          const app = last ? next + (next > root ? -1 : 1) : root + 7;
+          ev.push({time:p(bar,0),note:midi2note(root),dur:'4n'});
+          ev.push({time:p(bar,1),note:midi2note(fifth),dur:'4n'});
+          ev.push({time:p(bar,2),note:midi2note(root+4),dur:'4n'});
+          ev.push({time:p(bar,3),note:midi2note(app),dur:'4n'});
+          break;
+        }
+        case 'blues': {
+          [root,fifth,root,fifth,root,fifth,root,fifth].forEach((n,i) =>
+            ev.push({time:p(bar,Math.floor(i/2),(i%2)*2),note:midi2note(n),dur:'8n'}));
+          break;
+        }
+        case 'rock': {
+          for (let bt=0;bt<4;bt++) {
+            ev.push({time:p(bar,bt,0),note:midi2note(root),dur:'8n'});
+            ev.push({time:p(bar,bt,2),note:midi2note(bt===3&&last?next:root),dur:'8n'});
+          }
+          break;
+        }
+        case 'jamband': {
+          ev.push({time:p(bar,0),note:midi2note(root),dur:'4n'});
+          ev.push({time:p(bar,1),note:midi2note(fifth),dur:'4n'});
+          ev.push({time:p(bar,2),note:midi2note(root+12),dur:'4n'});
+          ev.push({time:p(bar,3),note:midi2note(fifth),dur:'4n'});
+          break;
+        }
+        case 'reggae': {
+          ev.push({time:p(bar,0,0),note:midi2note(root),dur:'2n'});
+          ev.push({time:p(bar,2,0),note:midi2note(root),dur:'4n'});
+          ev.push({time:p(bar,3,2),note:midi2note(root),dur:'8n'});
+          break;
+        }
+      }
+      bar++;
+    }
+  });
+  return ev;
+}
+
+function buildGuitar(prog, genre, key) {
+  const ev = [];
+  let bar = 0;
+  prog.forEach(c => {
+    const rootMidi = stMidi(key, c.st, 3);
+    const cn = buildCNotes(rootMidi, c.t, 3);
+    for (let b = 0; b < c.b; b++) {
+      switch (genre) {
+        case 'jazz': {
+          // off-beat comp
+          ev.push({time:p(bar,1,2),notes:cn,dur:'8n'});
+          ev.push({time:p(bar,3,0),notes:cn,dur:'8n'});
+          if (b%2===0) ev.push({time:p(bar,0,2),notes:cn,dur:'8n'});
+          break;
+        }
+        case 'blues': {
+          ev.push({time:p(bar,0),notes:cn,dur:'4n'});
+          ev.push({time:p(bar,2),notes:cn,dur:'4n'});
+          break;
+        }
+        case 'rock': {
+          // driving 8th notes
+          for (let bt=0;bt<4;bt++) {
+            ev.push({time:p(bar,bt,0),notes:cn,dur:'8n'});
+            ev.push({time:p(bar,bt,2),notes:cn,dur:'8n'});
+          }
+          break;
+        }
+        case 'jamband': {
+          ev.push({time:p(bar,0),notes:cn,dur:'4n'});
+          ev.push({time:p(bar,2),notes:cn,dur:'4n'});
+          if (b%2===1) ev.push({time:p(bar,3,2),notes:cn,dur:'8n'});
+          break;
+        }
+        case 'reggae': {
+          // skank: only on off-beats
+          [0,1,2,3].forEach(bt => ev.push({time:p(bar,bt,2),notes:cn,dur:'16n'}));
+          break;
+        }
+      }
+      bar++;
+    }
+  });
+  return ev;
+}
+
+function buildKeys(prog, genre, key) {
+  const ev = [];
+  let bar = 0;
+  prog.forEach(c => {
+    const rootMidi = stMidi(key, c.st, 4);
+    const cn = buildCNotes(rootMidi, c.t, 4);
+    for (let b = 0; b < c.b; b++) {
+      switch (genre) {
+        case 'jazz': {
+          ev.push({time:p(bar,0,2),notes:cn,dur:'8n'});
+          ev.push({time:p(bar,1,0),notes:cn,dur:'8n'});
+          ev.push({time:p(bar,2,2),notes:cn,dur:'8n'});
+          if (b%2===1) ev.push({time:p(bar,3,2),notes:cn,dur:'8n'});
+          break;
+        }
+        case 'blues': {
+          ev.push({time:p(bar,0),notes:cn,dur:'1n'});
+          break;
+        }
+        case 'rock': {
+          if (b%2===0) {
+            ev.push({time:p(bar,0),notes:cn,dur:'4n'});
+            ev.push({time:p(bar,2),notes:cn,dur:'4n'});
+          }
+          break;
+        }
+        case 'jamband': {
+          // organ arpeggio
+          cn.slice(0,4).forEach((n,ni) => ev.push({time:p(bar,ni),notes:[n],dur:'4n'}));
+          break;
+        }
+        case 'reggae': {
+          ev.push({time:p(bar,0),notes:cn,dur:'4n'});
+          break;
+        }
+      }
+      bar++;
+    }
+  });
+  return ev;
+}
+
+function buildHorns(prog, genre, key) {
+  const ev = [];
+  let bar = 0;
+  prog.forEach(c => {
+    const rootMidi = stMidi(key, c.st, 4);
+    const hn = [midi2note(rootMidi + 4), midi2note(rootMidi + 7)]; // 3rd + 5th
+    for (let b = 0; b < c.b; b++) {
+      switch (genre) {
+        case 'jazz': {
+          if (b%2===0) {
+            ev.push({time:p(bar,1),notes:hn,dur:'8n'});
+            ev.push({time:p(bar,3),notes:hn,dur:'8n'});
+          }
+          break;
+        }
+        case 'blues': {
+          ev.push({time:p(bar,0),notes:hn,dur:'4n'});
+          if (b%2===0) ev.push({time:p(bar,2,2),notes:hn,dur:'8n'});
+          break;
+        }
+        default: {
+          if (b%4===0) ev.push({time:p(bar,0),notes:hn,dur:'4n'});
+          break;
+        }
+      }
+      bar++;
+    }
+  });
+  return ev;
+}
+
+function buildHL(prog) {
+  const ev = [];
+  let bar = 0;
+  prog.forEach((c, idx) => { ev.push({time:p(bar,0),idx}); bar += c.b; });
+  return ev;
+}
+
+// ── Chord display ──────────────────────────────────────────────────────────
+function renderChords(prog, songName, key) {
+  chordRow.innerHTML = '';
+  songSource.textContent = `Inspired by: ${songName}`;
+  prog.forEach((c, i) => {
+    if (i > 0) {
+      const sep = document.createElement('span');
+      sep.className = 'chord-sep'; sep.textContent = '–';
+      chordRow.appendChild(sep);
+    }
+    const chip = document.createElement('div');
+    chip.className = 'chord-chip'; chip.id = `chip-${i}`;
+    chip.innerHTML = `<span class="cc-name">${noteAtSt(key,c.st)}${CSX[c.t]}</span>`
+      + `<span class="cc-bars">${c.b}bar${c.b>1?'s':''}</span>`;
+    chordRow.appendChild(chip);
+  });
+}
+
+function setChip(idx) {
+  document.querySelectorAll('.chord-chip').forEach((c,i) => c.classList.toggle('playing', i===idx));
+}
+
+// ── Node tracking ──────────────────────────────────────────────────────────
+function reg(n) { disposables.push(n); return n; }
+let seqDisposables = [];
+function regS(s) { seqDisposables.push(s); return s; }
+
+function disposeSeqs() {
+  seqDisposables.forEach(s => { try { s.stop(); s.dispose(); } catch(_){} });
+  seqDisposables = [];
+  bassPart = guitarPart = keysPart = hornsPart = hlPart = null;
+}
+
+function disposeAll() {
   Tone.getTransport().stop();
   Tone.getTransport().cancel();
-  currentParts.forEach(p => { try { p.stop(); p.dispose(); } catch(e){} });
-  currentParts = [];
-  if (chordSynth)  { chordSynth.dispose();  chordSynth  = null; }
-  if (bassSynth)   { bassSynth.dispose();   bassSynth   = null; }
-  if (melodySynth) { melodySynth.dispose(); melodySynth = null; }
+  isPlaying = false;
+
+  disposeSeqs();
+  drumSeqs.forEach(s => { try { s.stop(); s.dispose(); } catch(_){} });
+  drumSeqs = [];
+
+  disposables.forEach(n => { try { n.dispose(); } catch(_){} });
+  disposables = [];
+
+  drumBus = bassBus = guitarBus = keysBus = hornsBus = null;
+  drumPlayers = pianoSampler = bassSynth = guitarSynth = hornsSynth = null;
 }
 
-// ─── Play / Stop button ────────────────────────────────────────────────────
-playBtn.addEventListener('click', async () => {
-  if (playing) {
-    stopTrack();
-    playing = false;
-    playIcon.textContent = '▶';
-    playLabel.textContent = 'Play';
-    playBtn.classList.remove('playing');
-    setViz(false);
-    statusEl.textContent = 'Stopped';
-    statusEl.className = 'status';
+// ── Drum helper ────────────────────────────────────────────────────────────
+function playDrum(name, time) {
+  if (!drumPlayers) return;
+  try { drumPlayers.player(name).start(time); } catch(_){}
+}
+
+// ── Generate ───────────────────────────────────────────────────────────────
+genBtn.addEventListener('click', async () => {
+  if (isPlaying) { stopPlayback(); await new Promise(r => setTimeout(r, 100)); }
+  disposeAll();
+
+  const key    = keyEl.value;
+  const mode   = modeEl.value;
+  const genre  = activeGenre;
+  const song   = SONGS[genre][activeSong];
+  const g      = GENRES[genre];
+
+  applyGenreVolumes(genre);
+
+  // Create mix buses
+  drumBus   = reg(new Tone.Volume(g.defaultVols.drums).toDestination());
+  bassBus   = reg(new Tone.Volume(g.defaultVols.bass).toDestination());
+  guitarBus = reg(new Tone.Volume(g.defaultVols.guitar).toDestination());
+  keysBus   = reg(new Tone.Volume(g.defaultVols.keys).toDestination());
+  hornsBus  = reg(new Tone.Volume(g.defaultVols.horns).toDestination());
+
+  // Drum sampler
+  drumPlayers = reg(new Tone.Players({
+    urls: {
+      kick:    'kick.mp3',
+      snare:   'snare.mp3',
+      hihat:   'hihat.mp3',
+      openhat: 'openhat.mp3',
+      rim:     'rim.mp3',
+    },
+    baseUrl: 'https://tonejs.github.io/audio/drum-rack/',
+  }).connect(drumBus));
+
+  // Piano sampler (Salamander Grand)
+  pianoSampler = reg(new Tone.Sampler({
+    urls: {
+      'C2':'C2.mp3','D#2':'Ds2.mp3','F#2':'Fs2.mp3',
+      'A2':'A2.mp3','C3':'C3.mp3','D#3':'Ds3.mp3','F#3':'Fs3.mp3',
+      'A3':'A3.mp3','C4':'C4.mp3','D#4':'Ds4.mp3','F#4':'Fs4.mp3',
+      'A4':'A4.mp3','C5':'C5.mp3','D#5':'Ds5.mp3','F#5':'Fs5.mp3',
+      'A5':'A5.mp3','C6':'C6.mp3',
+    },
+    baseUrl: 'https://tonejs.github.io/audio/salamander/',
+  }).connect(keysBus));
+
+  // Bass synth
+  const bassOscType = {jazz:'triangle',blues:'triangle',rock:'sawtooth',jamband:'triangle',reggae:'sine'}[genre];
+  bassSynth = reg(new Tone.Synth({
+    oscillator:{type:bassOscType},
+    envelope:{attack:0.02,decay:0.2,sustain:{jazz:0.65,reggae:0.85}[genre]??0.5,release:genre==='jazz'?0.9:0.3},
+    volume:2,
+  }));
+  const bassLP = reg(new Tone.Filter({frequency:genre==='rock'?500:350,type:'lowpass'}).connect(bassBus));
+  if (genre==='rock') {
+    const bd = reg(new Tone.Distortion(0.2).connect(bassLP));
+    bassSynth.connect(bd);
+  } else { bassSynth.connect(bassLP); }
+
+  // Guitar synth
+  const gOsc = {rock:'sawtooth',blues:'sawtooth',reggae:'square'}[genre] ?? 'triangle';
+  guitarSynth = reg(new Tone.PolySynth(Tone.Synth, {
+    oscillator:{type:gOsc},
+    envelope:{attack:genre==='reggae'?0.001:0.01,decay:genre==='reggae'?0.08:0.15,
+              sustain:genre==='reggae'?0:0.45,release:0.2},
+    volume:3,
+  }));
+  const gLP = reg(new Tone.Filter({frequency:genre==='rock'?3000:2000,type:'lowpass'}).connect(guitarBus));
+  if (genre==='rock'||genre==='blues') {
+    const gDist = reg(new Tone.Distortion(genre==='rock'?0.5:0.2));
+    guitarSynth.connect(gDist); gDist.connect(gLP);
+  } else if (genre==='jazz') {
+    const gCh = reg(new Tone.Chorus(4,2.5,0.3).start());
+    guitarSynth.connect(gCh); gCh.connect(gLP);
   } else {
-    statusEl.textContent = 'Starting…';
-    playIcon.textContent = '⏸';
-    playLabel.textContent = 'Stop';
-    playBtn.classList.add('playing');
-    await startTrack();
-    playing = true;
-    setViz(true);
-    const g = GENRES[genre];
-    statusEl.textContent = `${g.label} · ${keySelect.value} ${modeSelect.value} · ${bpmSlider.value} BPM`;
-    statusEl.className = 'status on';
+    guitarSynth.connect(gLP);
   }
+
+  // Horns synth
+  hornsSynth = reg(new Tone.PolySynth(Tone.Synth, {
+    oscillator:{type:'sawtooth'},
+    envelope:{attack:0.025,decay:0.1,sustain:0.75,release:0.4},
+    volume:2,
+  }));
+  const hornLP = reg(new Tone.Filter({frequency:2200,type:'lowpass'}).connect(hornsBus));
+  const hornRev = reg(new Tone.Reverb({decay:1.2,wet:0.2}));
+  hornsSynth.connect(hornLP);
+  hornLP.connect(hornRev);
+  hornRev.connect(hornsBus);
+
+  // Build progression
+  const prog = song.prog.map(c => ({...c, name: noteAtSt(key,c.st)+CSX[c.t]}));
+  const totalBars = prog.reduce((s,c) => s+c.b, 0);
+
+  // Store state
+  genState = {key, mode, genre, song, prog, totalBars};
+
+  // Wait for samples
+  statEl.textContent = 'Loading samples…';
+  statEl.className = 'status loading loading-pulse';
+  genBtn.disabled = true; playBtn.disabled = true;
+
+  await Tone.loaded();
+
+  renderChords(prog, song.name, key);
+  playBtn.disabled = false; genBtn.disabled = false;
+  statEl.textContent = `${g.name} · "${song.name}" · ${key} ${mode} · ${totalBars} bars — ready`;
+  statEl.className = 'status';
 });
 
-// Update status label when key/mode change while playing
-keySelect.addEventListener('change', () => {
-  if (playing) { stopTrack(); playing = false; playBtn.click(); }
+// ── Playback ───────────────────────────────────────────────────────────────
+playBtn.addEventListener('click', async () => {
+  if (!genState) return;
+  if (isPlaying) stopPlayback(); else await startPlayback();
 });
-modeSelect.addEventListener('change', () => {
-  if (playing) { stopTrack(); playing = false; playBtn.click(); }
-});
+
+async function startPlayback() {
+  await Tone.start();
+  const {key, mode, genre, prog, totalBars} = genState;
+  const g = GENRES[genre];
+  const loop = totalBars + 'm';
+
+  const T = Tone.getTransport();
+  T.bpm.value = +bpmSldr.value;
+  T.swing = g.swing; T.swingSubdivision = '8n';
+  T.position = 0;
+
+  // Update buses to current slider values
+  const pairs = [['drumVol',drumBus],['bassVol',bassBus],['guitarVol',guitarBus],
+                 ['keysVol',keysBus],['hornsVol',hornsBus]];
+  pairs.forEach(([id,bus]) => {
+    const v = +$(id).value;
+    if (bus) bus.volume.value = v <= -40 ? -Infinity : v;
+  });
+
+  // Drum sequences
+  const dp = g.drums;
+  const kickS  = new Tone.Sequence((t,v)=>v&&playDrum('kick',t),  dp.kick,  '16n');
+  const snareS = new Tone.Sequence((t,v)=>v&&playDrum('snare',t), dp.snare, '16n');
+  const hhatS  = new Tone.Sequence((t,v)=>v&&playDrum('hihat',t), dp.hihat, '16n');
+  const openS  = new Tone.Sequence((t,v)=>v&&playDrum('openhat',t),dp.open, '16n');
+  drumSeqs = [kickS, snareS, hhatS, openS];
+  drumSeqs.forEach(s => { s.loop=true; s.start(0); });
+
+  // Bass part
+  bassPart = regS(new Tone.Part((t,e)=>bassSynth.triggerAttackRelease(e.note,e.dur,t), buildBass(prog,genre,key)));
+  bassPart.loop=true; bassPart.loopEnd=loop; bassPart.start(0);
+
+  // Guitar part
+  guitarPart = regS(new Tone.Part((t,e)=>guitarSynth.triggerAttackRelease(e.notes,e.dur,t), buildGuitar(prog,genre,key)));
+  guitarPart.loop=true; guitarPart.loopEnd=loop; guitarPart.start(0);
+
+  // Keys part (piano sampler)
+  keysPart = regS(new Tone.Part((t,e)=>pianoSampler.triggerAttackRelease(e.notes,e.dur,t), buildKeys(prog,genre,key)));
+  keysPart.loop=true; keysPart.loopEnd=loop; keysPart.start(0);
+
+  // Horns part
+  hornsPart = regS(new Tone.Part((t,e)=>hornsSynth.triggerAttackRelease(e.notes,e.dur,t), buildHorns(prog,genre,key)));
+  hornsPart.loop=true; hornsPart.loopEnd=loop; hornsPart.start(0);
+
+  // Chord highlight
+  hlPart = regS(new Tone.Part((t,e)=>Tone.getDraw().schedule(()=>setChip(e.idx),t), buildHL(prog)));
+  hlPart.loop=true; hlPart.loopEnd=loop; hlPart.start(0);
+
+  T.start();
+  isPlaying = true;
+  playBtn.textContent = '⏸ Stop';
+  playBtn.classList.add('is-playing');
+  const {genre:g2,song,key:k,mode} = genState;
+  statEl.textContent = `Playing · ${GENRES[g2].name} · "${song.name}" · ${k} ${mode} · ${+bpmSldr.value} BPM`;
+  statEl.className = 'status on';
+}
+
+function stopPlayback() {
+  Tone.getTransport().stop();
+  disposeSeqs();
+  drumSeqs.forEach(s=>{try{s.stop();s.dispose();}catch(_){}});
+  drumSeqs = [];
+  isPlaying = false; setChip(-1);
+  playBtn.textContent = '▶ Play'; playBtn.classList.remove('is-playing');
+  if (genState) {
+    const {genre,song,key,mode,totalBars} = genState;
+    statEl.textContent = `${GENRES[genre].name} · "${song.name}" · ${key} ${mode} · ${totalBars} bars`;
+  }
+  statEl.className = 'status';
+}
+
+// ── Init ───────────────────────────────────────────────────────────────────
+renderSongPicker('jazz');
 </script>
 </body>
 </html>
