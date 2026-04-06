@@ -632,20 +632,25 @@ genBtn.addEventListener('click', async () => {
   const bassLP = reg(new Tone.Filter({frequency:450, type:'lowpass', rolloff:-24}).connect(bassBus));
   bassSynth.connect(bassLP);
 
-  // Guitar synth
-  const gOsc = {rock:'sawtooth',blues:'sawtooth',reggae:'square'}[genre] ?? 'triangle';
+  // Guitar synth — plucked string via zero-sustain PolySynth
+  const gAtk  = {jazz:0.005, blues:0.003, rock:0.001, jamband:0.005, reggae:0.001}[genre] ?? 0.003;
+  const gDec  = {jazz:0.50,  blues:0.38,  rock:0.25,  jamband:0.60,  reggae:0.06 }[genre] ?? 0.38;
+  const gOsc  = {rock:'sawtooth', blues:'sawtooth'}[genre] ?? 'triangle';
+  const gFilt = {jazz:3500, blues:2800, rock:4500, jamband:2000, reggae:1400}[genre] ?? 2800;
   guitarSynth = reg(new Tone.PolySynth(Tone.Synth, {
-    oscillator:{type:gOsc},
-    envelope:{attack:genre==='reggae'?0.001:0.01,decay:genre==='reggae'?0.08:0.15,
-              sustain:genre==='reggae'?0:0.45,release:0.2},
-    volume:3,
+    oscillator: { type: gOsc },
+    envelope: { attack: gAtk, decay: gDec, sustain: 0.0, release: 0.05 },
+    volume: 3,
   }));
-  const gLP = reg(new Tone.Filter({frequency:genre==='rock'?3000:2000,type:'lowpass'}).connect(guitarBus));
-  if (genre==='rock'||genre==='blues') {
-    const gDist = reg(new Tone.Distortion(genre==='rock'?0.5:0.2));
+  const gLP = reg(new Tone.Filter({frequency: gFilt, type:'lowpass'}).connect(guitarBus));
+  if (genre === 'rock') {
+    const gDist = reg(new Tone.Distortion(0.55));
     guitarSynth.connect(gDist); gDist.connect(gLP);
-  } else if (genre==='jazz') {
-    const gCh = reg(new Tone.Chorus(4,2.5,0.3).start());
+  } else if (genre === 'blues') {
+    const gDist = reg(new Tone.Distortion(0.15));
+    guitarSynth.connect(gDist); gDist.connect(gLP);
+  } else if (genre === 'jazz') {
+    const gCh = reg(new Tone.Chorus(4, 2.5, 0.3).start());
     guitarSynth.connect(gCh); gCh.connect(gLP);
   } else {
     guitarSynth.connect(gLP);
