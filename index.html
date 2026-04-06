@@ -157,11 +157,6 @@
         <input type="range" id="keysVol" min="-40" max="0" step="1" value="-16">
         <span class="mixer-val" id="keysVolVal">-16 dB</span>
       </div>
-      <div class="mixer-track">
-        <div class="mixer-label"><span class="mix-icon">🎺</span>Horns</div>
-        <input type="range" id="hornsVol" min="-40" max="0" step="1" value="-20">
-        <span class="mixer-val" id="hornsVolVal">-20 dB</span>
-      </div>
     </div>
   </div>
 
@@ -270,36 +265,36 @@ const GENRES = {
   jazz: {
     name:'Jazz', bpm:120, swing:0.5,
     drums:{ kick:[1,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0], snare:[0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0], hihat:[1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0], open:[0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0] },
-    defaultVols:{ drums:-10, bass:-14, guitar:-28, keys:-14, horns:-12 },
+    defaultVols:{ drums:-10, bass:-14, guitar:-28, keys:-14 },
   },
   blues: {
     name:'Blues', bpm:80, swing:0.5,
     drums:{ kick:[1,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0], snare:[0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0], hihat:[1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0], open:[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0] },
-    defaultVols:{ drums:-10, bass:-14, guitar:-14, keys:-16, horns:-14 },
+    defaultVols:{ drums:-10, bass:-14, guitar:-14, keys:-16 },
   },
   rock: {
     name:'Rock', bpm:120, swing:0,
     drums:{ kick:[1,0,0,0,0,0,1,0,1,0,0,0,0,0,0,0], snare:[0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0], hihat:[1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0], open:[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0] },
-    defaultVols:{ drums:-8, bass:-12, guitar:-10, keys:-28, horns:-34 },
+    defaultVols:{ drums:-8, bass:-12, guitar:-10, keys:-28 },
   },
   jamband: {
     name:'Jam Band', bpm:95, swing:0.15,
     drums:{ kick:[1,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0], snare:[0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0], hihat:[1,0,1,0,0,0,1,0,1,0,0,0,0,0,1,0], open:[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0] },
-    defaultVols:{ drums:-12, bass:-14, guitar:-16, keys:-14, horns:-32 },
+    defaultVols:{ drums:-12, bass:-14, guitar:-16, keys:-14 },
   },
   reggae: {
     name:'Reggae', bpm:88, swing:0,
     drums:{ kick:[0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0], snare:[0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0], hihat:[0,0,1,0,0,0,1,0,0,0,1,0,0,0,1,0], open:[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0] },
-    defaultVols:{ drums:-10, bass:-12, guitar:-12, keys:-26, horns:-36 },
+    defaultVols:{ drums:-10, bass:-12, guitar:-12, keys:-26 },
   },
 };
 
 // ── State ──────────────────────────────────────────────────────────────────
 let activeGenre = 'jazz', activeSong = 0, genState = null, isPlaying = false;
-let drumBus, bassBus, guitarBus, keysBus, hornsBus;
+let drumBus, bassBus, guitarBus, keysBus;
 let drumPlayers = null, pianoSampler = null;
-let bassSynth = null, guitarSynth = null, hornsSynth = null;
-let drumSeqs = [], bassPart = null, guitarPart = null, keysPart = null, hornsPart = null, hlPart = null;
+let bassSynth = null, guitarSynth = null;
+let drumSeqs = [], bassPart = null, guitarPart = null, keysPart = null, hlPart = null;
 let disposables = []; // all nodes to dispose on cleanup
 
 // ── DOM ────────────────────────────────────────────────────────────────────
@@ -361,13 +356,11 @@ hookSlider('drumVol',   'drumVolVal',   () => drumBus);
 hookSlider('bassVol',   'bassVolVal',   () => bassBus);
 hookSlider('guitarVol', 'guitarVolVal', () => guitarBus);
 hookSlider('keysVol',   'keysVolVal',   () => keysBus);
-hookSlider('hornsVol',  'hornsVolVal',  () => hornsBus);
 
 function applyGenreVolumes(genre) {
   const dv = GENRES[genre].defaultVols;
   const pairs = [['drumVol','drumVolVal',dv.drums],['bassVol','bassVolVal',dv.bass],
-                 ['guitarVol','guitarVolVal',dv.guitar],['keysVol','keysVolVal',dv.keys],
-                 ['hornsVol','hornsVolVal',dv.horns]];
+                 ['guitarVol','guitarVolVal',dv.guitar],['keysVol','keysVolVal',dv.keys]];
   pairs.forEach(([id, vid, val]) => {
     $(id).value = val;
     $(vid).textContent = val + ' dB';
@@ -526,36 +519,6 @@ function buildKeys(prog, genre, key) {
   return ev;
 }
 
-function buildHorns(prog, genre, key) {
-  const ev = [];
-  let bar = 0;
-  prog.forEach(c => {
-    const rootMidi = stMidi(key, c.st, 4);
-    const hn = [midi2note(rootMidi + 4), midi2note(rootMidi + 7)]; // 3rd + 5th
-    for (let b = 0; b < c.b; b++) {
-      switch (genre) {
-        case 'jazz': {
-          if (b%2===0) {
-            ev.push({time:p(bar,1),notes:hn,dur:'8n'});
-            ev.push({time:p(bar,3),notes:hn,dur:'8n'});
-          }
-          break;
-        }
-        case 'blues': {
-          ev.push({time:p(bar,0),notes:hn,dur:'4n'});
-          if (b%2===0) ev.push({time:p(bar,2,2),notes:hn,dur:'8n'});
-          break;
-        }
-        default: {
-          if (b%4===0) ev.push({time:p(bar,0),notes:hn,dur:'4n'});
-          break;
-        }
-      }
-      bar++;
-    }
-  });
-  return ev;
-}
 
 function buildHL(prog) {
   const ev = [];
@@ -594,7 +557,7 @@ function regS(s) { seqDisposables.push(s); return s; }
 function disposeSeqs() {
   seqDisposables.forEach(s => { try { s.stop(); s.dispose(); } catch(_){} });
   seqDisposables = [];
-  bassPart = guitarPart = keysPart = hornsPart = hlPart = null;
+  bassPart = guitarPart = keysPart = hlPart = null;
 }
 
 function disposeAll() {
@@ -609,8 +572,8 @@ function disposeAll() {
   disposables.forEach(n => { try { n.dispose(); } catch(_){} });
   disposables = [];
 
-  drumBus = bassBus = guitarBus = keysBus = hornsBus = null;
-  drumPlayers = pianoSampler = bassSynth = guitarSynth = hornsSynth = null;
+  drumBus = bassBus = guitarBus = keysBus = null;
+  drumPlayers = pianoSampler = bassSynth = guitarSynth = null;
 }
 
 // ── Drum helper ────────────────────────────────────────────────────────────
@@ -636,7 +599,6 @@ genBtn.addEventListener('click', async () => {
   bassBus   = reg(new Tone.Volume(g.defaultVols.bass).toDestination());
   guitarBus = reg(new Tone.Volume(g.defaultVols.guitar).toDestination());
   keysBus   = reg(new Tone.Volume(g.defaultVols.keys).toDestination());
-  hornsBus  = reg(new Tone.Volume(g.defaultVols.horns).toDestination());
 
   // Drum sampler — correct path is drum-samples/<kit>/, not drum-rack/
   // Pick a kit that suits the genre
@@ -692,18 +654,6 @@ genBtn.addEventListener('click', async () => {
     guitarSynth.connect(gLP);
   }
 
-  // Horns synth
-  hornsSynth = reg(new Tone.PolySynth(Tone.Synth, {
-    oscillator:{type:'sawtooth'},
-    envelope:{attack:0.025,decay:0.1,sustain:0.75,release:0.4},
-    volume:2,
-  }));
-  const hornLP = reg(new Tone.Filter({frequency:2200,type:'lowpass'}).connect(hornsBus));
-  const hornRev = reg(new Tone.Reverb({decay:1.2,wet:0.2}));
-  hornsSynth.connect(hornLP);
-  hornLP.connect(hornRev);
-  hornRev.connect(hornsBus);
-
   // Build progression
   const prog = song.prog.map(c => ({...c, name: noteAtSt(key,c.st)+CSX[c.t]}));
   const totalBars = prog.reduce((s,c) => s+c.b, 0);
@@ -747,7 +697,7 @@ async function startPlayback() {
 
   // Update buses to current slider values
   const pairs = [['drumVol',drumBus],['bassVol',bassBus],['guitarVol',guitarBus],
-                 ['keysVol',keysBus],['hornsVol',hornsBus]];
+                 ['keysVol',keysBus]];
   pairs.forEach(([id,bus]) => {
     const v = +$(id).value;
     if (bus) bus.volume.value = v <= -40 ? -Infinity : v;
@@ -772,10 +722,6 @@ async function startPlayback() {
   // Keys part (piano sampler)
   keysPart = regS(new Tone.Part((t,e)=>pianoSampler.triggerAttackRelease(e.notes,e.dur,t), buildKeys(prog,genre,key)));
   keysPart.loop=true; keysPart.loopEnd=loop; keysPart.start(0);
-
-  // Horns part
-  hornsPart = regS(new Tone.Part((t,e)=>hornsSynth.triggerAttackRelease(e.notes,e.dur,t), buildHorns(prog,genre,key)));
-  hornsPart.loop=true; hornsPart.loopEnd=loop; hornsPart.start(0);
 
   // Chord highlight
   hlPart = regS(new Tone.Part((t,e)=>Tone.getDraw().schedule(()=>setChip(e.idx),t), buildHL(prog)));
