@@ -622,13 +622,11 @@ genBtn.addEventListener('click', async () => {
     baseUrl: 'https://tonejs.github.io/audio/salamander/',
   }).connect(keysBus));
 
-  // Bass synth — Karplus-Strong plucked string
-  const bassDamp = {jazz:2000, blues:2400, rock:3200, jamband:2800, reggae:1600}[genre] ?? 2400;
-  const bassRes  = {jazz:0.97, blues:0.96, rock:0.95, jamband:0.96, reggae:0.98}[genre] ?? 0.96;
-  bassSynth = reg(new Tone.PluckSynth({
-    attackNoise: 1,
-    dampening: bassDamp,
-    resonance: bassRes,
+  // Bass synth — plucked string via zero-sustain envelope
+  const bassDecay = {jazz:0.55, blues:0.45, rock:0.3, jamband:0.5, reggae:0.7}[genre] ?? 0.45;
+  bassSynth = reg(new Tone.Synth({
+    oscillator: { type: 'triangle' },
+    envelope: { attack: 0.001, decay: bassDecay, sustain: 0.0, release: 0.08 },
     volume: 6,
   }));
   const bassLP = reg(new Tone.Filter({frequency:450, type:'lowpass', rolloff:-24}).connect(bassBus));
@@ -711,7 +709,7 @@ async function startPlayback() {
   drumSeqs.forEach(s => { s.loop=true; s.start(0); });
 
   // Bass part
-  bassPart = regS(new Tone.Part((t,e)=>bassSynth.triggerAttack(e.note,t), buildBass(prog,genre,key)));
+  bassPart = regS(new Tone.Part((t,e)=>bassSynth.triggerAttackRelease(e.note,e.dur,t), buildBass(prog,genre,key)));
   bassPart.loop=true; bassPart.loopEnd=loop; bassPart.start(0);
 
   // Guitar part
