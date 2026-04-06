@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Backing Track Generator</title>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+  <script src="https://surikov.github.io/webaudiofont/npm/dist/WebAudioFontPlayer.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
@@ -187,7 +187,6 @@ const CSX = { // chord name suffixes
 };
 
 // ── Song data ──────────────────────────────────────────────────────────────
-// Each chord: {st: semitones from root, t: chord type, b: bars}
 const SONGS = {
   jazz: [
     { name: 'Autumn Leaves',
@@ -289,25 +288,42 @@ const GENRES = {
   },
 };
 
-// ── State ──────────────────────────────────────────────────────────────────
+// ── Audio engine ───────────────────────────────────────────────────────────
+let audioCtx  = null;
+let wafPlayer = null;
+let drumPreset = null, bassPreset = null, guitarPreset = null, keysPreset = null;
+// Fallback drum buffers loaded from Tone.js samples when WAF drum preset fails
+let drumBuffers = null; // { kick, snare, hihat, open } AudioBuffer map
+
+// Mixer gain nodes (created fresh each Play, released each Stop)
+let drumGain = null, bassGain = null, guitarGain = null, keysGain = null;
+
+// ── Playback state ─────────────────────────────────────────────────────────
 let activeGenre = 'jazz', activeSong = 0, genState = null, isPlaying = false;
-let drumBus, bassBus, guitarBus, keysBus;
-let drumPlayers = null, pianoSampler = null;
-let bassSynth = null, guitarSynth = null;
-let drumSeqs = [], bassPart = null, guitarPart = null, keysPart = null, hlPart = null;
-let disposables = []; // all nodes to dispose on cleanup
+let schedulerTimer = null;
+let playStartTime = 0, loopDurSec = 0;
+let allEvents = [], nextEvIdx = 0, nextLoopTime = 0;
 
 // ── DOM ────────────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
-const keyEl = $('keySelect');
+const keyEl   = $('keySelect');
 const bpmSldr = $('bpmSlider'), bpmDisp = $('bpmDisplay');
-const genBtn = $('generateBtn'), playBtn = $('playBtn'), statEl = $('status');
+const genBtn  = $('generateBtn'), playBtn = $('playBtn'), statEl = $('status');
 const songGrid = $('songGrid'), chordRow = $('chordRow'), songSource = $('songSource');
 
-// ── BPM ────────────────────────────────────────────────────────────────────
+// ── BPM slider ─────────────────────────────────────────────────────────────
 bpmSldr.addEventListener('input', () => {
   bpmDisp.textContent = bpmSldr.value;
-  if (isPlaying) Tone.getTransport().bpm.rampTo(+bpmSldr.value, 0.1);
+  if (isPlaying && genState && audioCtx) {
+    // Recompute event timings and reset scheduler from now
+    const {key, genre, prog, totalBars} = genState;
+    const bpm = +bpmSldr.value;
+    loopDurSec = totalBars * 4 * (60 / bpm);
+    allEvents  = buildAllEvents(prog, genre, key, bpm, GENRES[genre].swing);
+    nextEvIdx  = 0;
+    nextLoopTime = audioCtx.currentTime + 0.05;
+    playStartTime = nextLoopTime;
+  }
 });
 
 // ── Genre buttons ──────────────────────────────────────────────────────────
@@ -317,7 +333,7 @@ $('genreGrid').addEventListener('click', e => {
   document.querySelectorAll('.genre-btn').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   activeGenre = btn.dataset.genre;
-  activeSong = 0;
+  activeSong  = 0;
   bpmSldr.value = GENRES[activeGenre].bpm;
   bpmDisp.textContent = bpmSldr.value;
   renderSongPicker(activeGenre);
@@ -343,19 +359,24 @@ songGrid.addEventListener('click', e => {
 });
 
 // ── Mixer sliders ──────────────────────────────────────────────────────────
-function hookSlider(id, valId, getBus) {
+function dbToGain(db) {
+  if (db <= -40) return 0;
+  return Math.pow(10, db / 20);
+}
+
+function hookSlider(id, valId, getGain) {
   const sl = $(id), vl = $(valId);
   sl.addEventListener('input', () => {
     const db = +sl.value;
     vl.textContent = db + ' dB';
-    const b = getBus();
-    if (b) b.volume.value = db <= -40 ? -Infinity : db;
+    const g = getGain();
+    if (g) g.gain.value = dbToGain(db);
   });
 }
-hookSlider('drumVol',   'drumVolVal',   () => drumBus);
-hookSlider('bassVol',   'bassVolVal',   () => bassBus);
-hookSlider('guitarVol', 'guitarVolVal', () => guitarBus);
-hookSlider('keysVol',   'keysVolVal',   () => keysBus);
+hookSlider('drumVol',   'drumVolVal',   () => drumGain);
+hookSlider('bassVol',   'bassVolVal',   () => bassGain);
+hookSlider('guitarVol', 'guitarVolVal', () => guitarGain);
+hookSlider('keysVol',   'keysVolVal',   () => keysGain);
 
 function applyGenreVolumes(genre) {
   const dv = GENRES[genre].defaultVols;
@@ -368,15 +389,26 @@ function applyGenreVolumes(genre) {
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
-function midi2note(m) { return Tone.Frequency(m,'midi').toNote(); }
+// Pure-JS MIDI helpers — no Tone.js dependency
 function stMidi(keyNote, semitones, octave) {
-  return Tone.Frequency(keyNote + String(octave)).toMidi() + semitones;
+  return (octave + 1) * 12 + NOTES.indexOf(keyNote) + semitones;
 }
 function noteAtSt(keyNote, semitones) {
   return NOTES[(NOTES.indexOf(keyNote) + semitones + 120) % 12];
 }
-function buildCNotes(rootMidi, type, lim) {
-  return CI[type].slice(0, lim).map(i => midi2note(rootMidi + i));
+function buildCNotesMidi(rootMidi, type, lim) {
+  return CI[type].slice(0, lim).map(i => rootMidi + i);
+}
+// Time string "bar:beat:s16" → seconds, with optional swing on s16===2 positions
+function timeStrToSec(timeStr, bpm, swing) {
+  const [bar, beat, s16] = timeStr.split(':').map(Number);
+  const bd = 60 / bpm;
+  let t = (bar * 4 + beat + s16 / 4) * bd;
+  if (swing > 0 && s16 === 2) t += swing * bd / 6;
+  return t;
+}
+function durToSec(durStr, bpm) {
+  return ({'1n':4,'2n':2,'4n':1,'8n':0.5,'16n':0.25}[durStr] ?? 1) * (60 / bpm);
 }
 function p(bar, beat, s16 = 0) { return `${bar}:${beat}:${s16}`; }
 
@@ -393,35 +425,35 @@ function buildBass(prog, genre, key) {
       switch (genre) {
         case 'jazz': {
           const app = last ? next + (next > root ? -1 : 1) : root + 7;
-          ev.push({time:p(bar,0),note:midi2note(root),dur:'4n'});
-          ev.push({time:p(bar,1),note:midi2note(fifth),dur:'4n'});
-          ev.push({time:p(bar,2),note:midi2note(root+4),dur:'4n'});
-          ev.push({time:p(bar,3),note:midi2note(app),dur:'4n'});
+          ev.push({time:p(bar,0),   midi:root,   dur:'4n'});
+          ev.push({time:p(bar,1),   midi:fifth,  dur:'4n'});
+          ev.push({time:p(bar,2),   midi:root+4, dur:'4n'});
+          ev.push({time:p(bar,3),   midi:app,    dur:'4n'});
           break;
         }
         case 'blues': {
           [root,fifth,root,fifth,root,fifth,root,fifth].forEach((n,i) =>
-            ev.push({time:p(bar,Math.floor(i/2),(i%2)*2),note:midi2note(n),dur:'8n'}));
+            ev.push({time:p(bar,Math.floor(i/2),(i%2)*2), midi:n, dur:'8n'}));
           break;
         }
         case 'rock': {
           for (let bt=0;bt<4;bt++) {
-            ev.push({time:p(bar,bt,0),note:midi2note(root),dur:'8n'});
-            ev.push({time:p(bar,bt,2),note:midi2note(bt===3&&last?next:root),dur:'8n'});
+            ev.push({time:p(bar,bt,0), midi:root, dur:'8n'});
+            ev.push({time:p(bar,bt,2), midi:bt===3&&last?next:root, dur:'8n'});
           }
           break;
         }
         case 'jamband': {
-          ev.push({time:p(bar,0),note:midi2note(root),dur:'4n'});
-          ev.push({time:p(bar,1),note:midi2note(fifth),dur:'4n'});
-          ev.push({time:p(bar,2),note:midi2note(root+12),dur:'4n'});
-          ev.push({time:p(bar,3),note:midi2note(fifth),dur:'4n'});
+          ev.push({time:p(bar,0), midi:root,    dur:'4n'});
+          ev.push({time:p(bar,1), midi:fifth,   dur:'4n'});
+          ev.push({time:p(bar,2), midi:root+12, dur:'4n'});
+          ev.push({time:p(bar,3), midi:fifth,   dur:'4n'});
           break;
         }
         case 'reggae': {
-          ev.push({time:p(bar,0,0),note:midi2note(root),dur:'2n'});
-          ev.push({time:p(bar,2,0),note:midi2note(root),dur:'4n'});
-          ev.push({time:p(bar,3,2),note:midi2note(root),dur:'8n'});
+          ev.push({time:p(bar,0,0), midi:root, dur:'2n'});
+          ev.push({time:p(bar,2,0), midi:root, dur:'4n'});
+          ev.push({time:p(bar,3,2), midi:root, dur:'8n'});
           break;
         }
       }
@@ -436,38 +468,35 @@ function buildGuitar(prog, genre, key) {
   let bar = 0;
   prog.forEach(c => {
     const rootMidi = stMidi(key, c.st, 3);
-    const cn = buildCNotes(rootMidi, c.t, 3);
+    const cn = buildCNotesMidi(rootMidi, c.t, 3);
     for (let b = 0; b < c.b; b++) {
       switch (genre) {
         case 'jazz': {
-          // off-beat comp
-          ev.push({time:p(bar,1,2),notes:cn,dur:'8n'});
-          ev.push({time:p(bar,3,0),notes:cn,dur:'8n'});
-          if (b%2===0) ev.push({time:p(bar,0,2),notes:cn,dur:'8n'});
+          ev.push({time:p(bar,1,2), midis:cn, dur:'8n'});
+          ev.push({time:p(bar,3,0), midis:cn, dur:'8n'});
+          if (b%2===0) ev.push({time:p(bar,0,2), midis:cn, dur:'8n'});
           break;
         }
         case 'blues': {
-          ev.push({time:p(bar,0),notes:cn,dur:'4n'});
-          ev.push({time:p(bar,2),notes:cn,dur:'4n'});
+          ev.push({time:p(bar,0), midis:cn, dur:'4n'});
+          ev.push({time:p(bar,2), midis:cn, dur:'4n'});
           break;
         }
         case 'rock': {
-          // driving 8th notes
           for (let bt=0;bt<4;bt++) {
-            ev.push({time:p(bar,bt,0),notes:cn,dur:'8n'});
-            ev.push({time:p(bar,bt,2),notes:cn,dur:'8n'});
+            ev.push({time:p(bar,bt,0), midis:cn, dur:'8n'});
+            ev.push({time:p(bar,bt,2), midis:cn, dur:'8n'});
           }
           break;
         }
         case 'jamband': {
-          ev.push({time:p(bar,0),notes:cn,dur:'4n'});
-          ev.push({time:p(bar,2),notes:cn,dur:'4n'});
-          if (b%2===1) ev.push({time:p(bar,3,2),notes:cn,dur:'8n'});
+          ev.push({time:p(bar,0), midis:cn, dur:'4n'});
+          ev.push({time:p(bar,2), midis:cn, dur:'4n'});
+          if (b%2===1) ev.push({time:p(bar,3,2), midis:cn, dur:'8n'});
           break;
         }
         case 'reggae': {
-          // skank: only on off-beats
-          [0,1,2,3].forEach(bt => ev.push({time:p(bar,bt,2),notes:cn,dur:'16n'}));
+          [0,1,2,3].forEach(bt => ev.push({time:p(bar,bt,2), midis:cn, dur:'16n'}));
           break;
         }
       }
@@ -482,34 +511,34 @@ function buildKeys(prog, genre, key) {
   let bar = 0;
   prog.forEach(c => {
     const rootMidi = stMidi(key, c.st, 4);
-    const cn = buildCNotes(rootMidi, c.t, 4);
+    const cn = buildCNotesMidi(rootMidi, c.t, 4);
     for (let b = 0; b < c.b; b++) {
       switch (genre) {
         case 'jazz': {
-          ev.push({time:p(bar,0,2),notes:cn,dur:'8n'});
-          ev.push({time:p(bar,1,0),notes:cn,dur:'8n'});
-          ev.push({time:p(bar,2,2),notes:cn,dur:'8n'});
-          if (b%2===1) ev.push({time:p(bar,3,2),notes:cn,dur:'8n'});
+          ev.push({time:p(bar,0,2), midis:cn, dur:'8n'});
+          ev.push({time:p(bar,1,0), midis:cn, dur:'8n'});
+          ev.push({time:p(bar,2,2), midis:cn, dur:'8n'});
+          if (b%2===1) ev.push({time:p(bar,3,2), midis:cn, dur:'8n'});
           break;
         }
         case 'blues': {
-          ev.push({time:p(bar,0),notes:cn,dur:'1n'});
+          ev.push({time:p(bar,0), midis:cn, dur:'1n'});
           break;
         }
         case 'rock': {
           if (b%2===0) {
-            ev.push({time:p(bar,0),notes:cn,dur:'4n'});
-            ev.push({time:p(bar,2),notes:cn,dur:'4n'});
+            ev.push({time:p(bar,0), midis:cn, dur:'4n'});
+            ev.push({time:p(bar,2), midis:cn, dur:'4n'});
           }
           break;
         }
         case 'jamband': {
-          // organ arpeggio
-          cn.slice(0,4).forEach((n,ni) => ev.push({time:p(bar,ni),notes:[n],dur:'4n'}));
+          // arpeggio: one note per beat
+          cn.slice(0,4).forEach((n,ni) => ev.push({time:p(bar,ni), midis:[n], dur:'4n'}));
           break;
         }
         case 'reggae': {
-          ev.push({time:p(bar,0),notes:cn,dur:'4n'});
+          ev.push({time:p(bar,0), midis:cn, dur:'4n'});
           break;
         }
       }
@@ -519,12 +548,54 @@ function buildKeys(prog, genre, key) {
   return ev;
 }
 
-
 function buildHL(prog) {
   const ev = [];
   let bar = 0;
-  prog.forEach((c, idx) => { ev.push({time:p(bar,0),idx}); bar += c.b; });
+  prog.forEach((c, idx) => { ev.push({time:p(bar,0), idx}); bar += c.b; });
   return ev;
+}
+
+// ── Build combined event list ───────────────────────────────────────────────
+// Converts all events to absolute seconds from loop start and sorts by time.
+function buildAllEvents(prog, genre, key, bpm, swing) {
+  const g = GENRES[genre];
+  const totalBars = prog.reduce((s,c) => s+c.b, 0);
+  const all = [];
+
+  buildBass(prog, genre, key).forEach(ev => all.push({
+    type:'bass', timeSec: timeStrToSec(ev.time, bpm, swing),
+    midi: ev.midi, durSec: durToSec(ev.dur, bpm),
+  }));
+
+  buildGuitar(prog, genre, key).forEach(ev => all.push({
+    type:'guitar', timeSec: timeStrToSec(ev.time, bpm, swing),
+    midis: ev.midis, durSec: durToSec(ev.dur, bpm),
+  }));
+
+  buildKeys(prog, genre, key).forEach(ev => all.push({
+    type:'keys', timeSec: timeStrToSec(ev.time, bpm, swing),
+    midis: ev.midis, durSec: durToSec(ev.dur, bpm),
+  }));
+
+  // Chord highlight events — no swing offset (visual beats stay on grid)
+  buildHL(prog).forEach(ev => all.push({
+    type:'hl', timeSec: timeStrToSec(ev.time, bpm, 0), idx: ev.idx,
+  }));
+
+  // Drum events — expand 1-bar 16-step pattern across all bars in the loop
+  const dp = g.drums;
+  for (let lb = 0; lb < totalBars; lb++) {
+    for (let step = 0; step < 16; step++) {
+      const beat = step >> 2, s16 = step & 3;
+      const ts = timeStrToSec(p(lb, beat, s16), bpm, swing);
+      if (dp.kick[step])              all.push({type:'drum', timeSec:ts, midi:35, durSec:0.5});
+      if (dp.snare[step])             all.push({type:'drum', timeSec:ts, midi:38, durSec:0.3});
+      if (dp.hihat[step])             all.push({type:'drum', timeSec:ts, midi:42, durSec:0.07});
+      if (dp.open && dp.open[step])   all.push({type:'drum', timeSec:ts, midi:46, durSec:0.5});
+    }
+  }
+
+  return all.sort((a, b) => a.timeSec - b.timeSec);
 }
 
 // ── Chord display ──────────────────────────────────────────────────────────
@@ -549,135 +620,217 @@ function setChip(idx) {
   document.querySelectorAll('.chord-chip').forEach((c,i) => c.classList.toggle('playing', i===idx));
 }
 
-// ── Node tracking ──────────────────────────────────────────────────────────
-function reg(n) { disposables.push(n); return n; }
-let seqDisposables = [];
-function regS(s) { seqDisposables.push(s); return s; }
+// ── Preset loading helpers ─────────────────────────────────────────────────
 
-function disposeSeqs() {
-  seqDisposables.forEach(s => { try { s.stop(); s.dispose(); } catch(_){} });
-  seqDisposables = [];
-  bassPart = guitarPart = keysPart = hlPart = null;
+// Load a script tag once; resolves when the script has executed.
+function loadScript(url) {
+  return new Promise((resolve, reject) => {
+    if (document.querySelector(`script[src="${url}"]`)) { resolve(); return; }
+    const s = document.createElement('script');
+    s.onload  = () => resolve();
+    s.onerror = () => reject(new Error('Failed to load ' + url));
+    s.src = url;
+    document.head.appendChild(s);
+  });
 }
 
-function disposeAll() {
-  Tone.getTransport().stop();
-  Tone.getTransport().cancel();
-  isPlaying = false;
-
-  disposeSeqs();
-  drumSeqs.forEach(s => { try { s.stop(); s.dispose(); } catch(_){} });
-  drumSeqs = [];
-
-  disposables.forEach(n => { try { n.dispose(); } catch(_){} });
-  disposables = [];
-
-  drumBus = bassBus = guitarBus = keysBus = null;
-  drumPlayers = pianoSampler = bassSynth = guitarSynth = null;
+// Decode all undecoded zones in a preset using the current AudioContext.
+// Returns a Promise that resolves when every zone.buffer is set.
+function decodePreset(preset) {
+  if (!preset || !preset.zones) return Promise.resolve();
+  return Promise.all(preset.zones.map(zone => {
+    if (zone.buffer) return Promise.resolve();
+    return new Promise(res => {
+      try {
+        // zone.file can be a plain JS number-array OR a Uint8Array
+        const bytes = new Uint8Array(zone.file.length);
+        for (let i = 0; i < zone.file.length; i++) bytes[i] = zone.file[i];
+        audioCtx.decodeAudioData(bytes.buffer, buf => { zone.buffer = buf; res(); }, () => {
+          console.warn('[WAF] decodeAudioData failed for a zone — skipping');
+          res();
+        });
+      } catch(e) { console.warn('[WAF] decodeZone error:', e); res(); }
+    });
+  }));
 }
 
-// ── Drum helper ────────────────────────────────────────────────────────────
-function playDrum(name, time) {
-  if (!drumPlayers) return;
-  try { drumPlayers.player(name).start(time); } catch(_){}
+// Returns true when every loaded preset has all zones decoded.
+function allPresetsDecoded() {
+  const ok = p => !p || (p.zones && p.zones.every(z => z.buffer));
+  const drumReady = drumBuffers !== null || ok(drumPreset);
+  return drumReady && ok(bassPreset) && ok(guitarPreset) && ok(keysPreset);
+}
+
+// ── Lookahead scheduler ────────────────────────────────────────────────────
+const LOOKAHEAD = 0.12; // seconds to schedule ahead
+
+function scheduleEvent(ev, absTime) {
+  switch (ev.type) {
+    case 'drum': {
+      const drumType = ev.midi <= 36 ? 'kick' : ev.midi === 38 || ev.midi === 40 ? 'snare' : ev.midi === 46 ? 'open' : 'hihat';
+      if (drumPreset && drumGain) {
+        wafPlayer.queueWaveTable(audioCtx, drumGain, drumPreset, absTime, ev.midi, ev.durSec, 1.0);
+      } else if (drumBuffers && drumGain) {
+        const buf = drumBuffers[drumType];
+        if (!scheduleEvent._drumLogged) {
+          scheduleEvent._drumLogged = true;
+          console.log('[sched] First drum hit via fallback — midi:', ev.midi, '→ type:', drumType,
+            '| buf:', !!buf, '| gainValue:', drumGain.gain.value.toFixed(4),
+            '| drumBuffers keys:', Object.keys(drumBuffers));
+        }
+        if (buf) {
+          const src = audioCtx.createBufferSource();
+          src.buffer = buf;
+          src.connect(drumGain);
+          src.start(absTime);
+        } else {
+          console.warn('[sched] No buffer for drum type:', drumType, '— drumBuffers keys:', Object.keys(drumBuffers));
+        }
+      } else {
+        console.warn('[sched] drum hit skipped — drumPreset:', !!drumPreset, 'drumBuffers:', !!drumBuffers, 'drumGain:', !!drumGain);
+      }
+      break;
+    }
+    case 'bass':
+      if (bassPreset && bassGain)
+        wafPlayer.queueWaveTable(audioCtx, bassGain, bassPreset, absTime, ev.midi, ev.durSec, 1.0);
+      break;
+    case 'guitar':
+      if (guitarPreset && guitarGain)
+        ev.midis.forEach(m =>
+          wafPlayer.queueWaveTable(audioCtx, guitarGain, guitarPreset, absTime, m, ev.durSec, 1.0));
+      break;
+    case 'keys':
+      if (keysPreset && keysGain)
+        ev.midis.forEach(m =>
+          wafPlayer.queueWaveTable(audioCtx, keysGain, keysPreset, absTime, m, ev.durSec, 1.0));
+      break;
+    case 'hl': {
+      const delay = Math.max(0, (absTime - audioCtx.currentTime) * 1000);
+      setTimeout(() => { if (isPlaying) setChip(ev.idx); }, delay);
+      break;
+    }
+  }
+}
+
+function runScheduler() {
+  if (!isPlaying || !audioCtx || !allEvents.length) return;
+  const until = audioCtx.currentTime + LOOKAHEAD;
+  for (;;) {
+    const absTime = nextLoopTime + allEvents[nextEvIdx].timeSec;
+    if (absTime >= until) break;
+    scheduleEvent(allEvents[nextEvIdx], absTime);
+    if (++nextEvIdx >= allEvents.length) {
+      nextEvIdx = 0;
+      nextLoopTime += loopDurSec;
+    }
+  }
 }
 
 // ── Generate ───────────────────────────────────────────────────────────────
 genBtn.addEventListener('click', async () => {
-  if (isPlaying) { stopPlayback(); await new Promise(r => setTimeout(r, 100)); }
-  disposeAll();
+  if (isPlaying) stopPlayback();
 
-  const key    = keyEl.value;
-  const genre  = activeGenre;
-  const song   = SONGS[genre][activeSong];
-  const g      = GENRES[genre];
+  const key   = keyEl.value;
+  const genre = activeGenre;
+  const song  = SONGS[genre][activeSong];
+  const g     = GENRES[genre];
 
   applyGenreVolumes(genre);
 
-  // Create mix buses
-  drumBus   = reg(new Tone.Volume(g.defaultVols.drums).toDestination());
-  bassBus   = reg(new Tone.Volume(g.defaultVols.bass).toDestination());
-  guitarBus = reg(new Tone.Volume(g.defaultVols.guitar).toDestination());
-  keysBus   = reg(new Tone.Volume(g.defaultVols.keys).toDestination());
-
-  // Drum sampler — correct path is drum-samples/<kit>/, not drum-rack/
-  // Pick a kit that suits the genre
-  const kitName = {jazz:'acoustic-kit', blues:'acoustic-kit', rock:'LINN', jamband:'LINN', reggae:'CR78'}[genre] || 'acoustic-kit';
-  const DR = `https://tonejs.github.io/audio/drum-samples/${kitName}/`;
-  drumPlayers = reg(new Tone.Players({
-    kick:  DR + 'kick.mp3',
-    snare: DR + 'snare.mp3',
-    hihat: DR + 'hihat.mp3',
-  }).connect(drumBus));
-
-  // Piano sampler (Salamander Grand)
-  pianoSampler = reg(new Tone.Sampler({
-    urls: {
-      'C2':'C2.mp3','D#2':'Ds2.mp3','F#2':'Fs2.mp3',
-      'A2':'A2.mp3','C3':'C3.mp3','D#3':'Ds3.mp3','F#3':'Fs3.mp3',
-      'A3':'A3.mp3','C4':'C4.mp3','D#4':'Ds4.mp3','F#4':'Fs4.mp3',
-      'A4':'A4.mp3','C5':'C5.mp3','D#5':'Ds5.mp3','F#5':'Fs5.mp3',
-      'A5':'A5.mp3','C6':'C6.mp3',
-    },
-    baseUrl: 'https://tonejs.github.io/audio/salamander/',
-  }).connect(keysBus));
-
-  // Bass synth — plucked string via zero-sustain envelope
-  const bassDecay = {jazz:0.55, blues:0.45, rock:0.3, jamband:0.5, reggae:0.7}[genre] ?? 0.45;
-  bassSynth = reg(new Tone.Synth({
-    oscillator: { type: 'triangle' },
-    envelope: { attack: 0.001, decay: bassDecay, sustain: 0.0, release: 0.08 },
-    volume: 6,
-  }));
-  const bassLP = reg(new Tone.Filter({frequency:450, type:'lowpass', rolloff:-24}).connect(bassBus));
-  bassSynth.connect(bassLP);
-
-  // Guitar synth — plucked string via zero-sustain PolySynth
-  const gAtk  = {jazz:0.005, blues:0.003, rock:0.001, jamband:0.005, reggae:0.001}[genre] ?? 0.003;
-  const gDec  = {jazz:0.50,  blues:0.38,  rock:0.25,  jamband:0.60,  reggae:0.06 }[genre] ?? 0.38;
-  const gOsc  = {rock:'sawtooth', blues:'sawtooth'}[genre] ?? 'triangle';
-  const gFilt = {jazz:3500, blues:2800, rock:4500, jamband:2000, reggae:1400}[genre] ?? 2800;
-  guitarSynth = reg(new Tone.PolySynth(Tone.Synth, {
-    oscillator: { type: gOsc },
-    envelope: { attack: gAtk, decay: gDec, sustain: 0.0, release: 0.05 },
-    volume: 3,
-  }));
-  const gLP = reg(new Tone.Filter({frequency: gFilt, type:'lowpass'}).connect(guitarBus));
-  if (genre === 'rock') {
-    const gDist = reg(new Tone.Distortion(0.55));
-    guitarSynth.connect(gDist); gDist.connect(gLP);
-  } else if (genre === 'blues') {
-    const gDist = reg(new Tone.Distortion(0.15));
-    guitarSynth.connect(gDist); gDist.connect(gLP);
-  } else if (genre === 'jazz') {
-    const gCh = reg(new Tone.Chorus(4, 2.5, 0.3).start());
-    guitarSynth.connect(gCh); gCh.connect(gLP);
-  } else {
-    guitarSynth.connect(gLP);
-  }
-
-  // Build progression
-  const prog = song.prog.map(c => ({...c, name: noteAtSt(key,c.st)+CSX[c.t]}));
+  const prog      = song.prog.map(c => ({...c, name: noteAtSt(key,c.st)+CSX[c.t]}));
   const totalBars = prog.reduce((s,c) => s+c.b, 0);
 
-  // Store state
   genState = {key, genre, song, prog, totalBars};
 
-  // Show chords and enable Play immediately — don't wait for samples
   renderChords(prog, song.name, key);
   playBtn.disabled = false;
   statEl.textContent = `${g.name} · "${song.name}" · ${key} · ${totalBars} bars — loading samples…`;
   statEl.className = 'status loading loading-pulse';
 
-  // Load samples in background; update status when done (5s timeout safety net)
-  Promise.race([Tone.loaded(), new Promise(r => setTimeout(r, 5000))])
-    .catch(() => {})
-    .then(() => {
-      if (genState && !isPlaying) {
-        statEl.textContent = `${g.name} · "${song.name}" · ${key} · ${totalBars} bars — ready`;
-        statEl.className = 'status';
-      }
-    });
+  // Create AudioContext on first user gesture
+  if (!audioCtx) {
+    audioCtx  = new (window.AudioContext || window.webkitAudioContext)();
+    wafPlayer = new WebAudioFontPlayer();
+  }
+  await audioCtx.resume();
+  console.log('[WAF] AudioContext state after resume:', audioCtx.state);
+
+  // Load all four preset scripts in parallel
+  const base = 'https://surikov.github.io/webaudiofontdata/sound/';
+  try {
+    await Promise.all([
+      loadScript(base + '12836_0_JCLive_sf2_file.js'),
+      loadScript(base + '0330_Aspirin_sf2_file.js'),
+      loadScript(base + '0270_Aspirin_sf2_file.js'),
+      loadScript(base + '0000_JCLive_sf2_file.js'),
+    ]);
+  } catch(e) {
+    console.error('[WAF] A preset script failed to load:', e);
+  }
+
+  // Assign presets — drum bank files sometimes use _drum_ prefix instead of _tone_
+  drumPreset   = window._tone_12836_0_JCLive_sf2_file || window._drum_12836_0_JCLive_sf2_file || drumPreset;
+  bassPreset   = window._tone_0330_Aspirin_sf2_file   || bassPreset;
+  guitarPreset = window._tone_0270_Aspirin_sf2_file   || guitarPreset;
+  keysPreset   = window._tone_0000_JCLive_sf2_file    || keysPreset;
+
+  console.log('[WAF] Presets assigned:', {
+    drum:   !!drumPreset,   drumZones:   drumPreset?.zones?.length,
+    bass:   !!bassPreset,   bassZones:   bassPreset?.zones?.length,
+    guitar: !!guitarPreset, guitarZones: guitarPreset?.zones?.length,
+    keys:   !!keysPreset,   keysZones:   keysPreset?.zones?.length,
+  });
+
+  // Explicitly decode all zone buffers — this is the step the WAF loader
+  // skips over (it fires waitLoad before decodeAudioData completes).
+  await Promise.all([drumPreset, bassPreset, guitarPreset, keysPreset].map(decodePreset));
+
+  // If WAF drum preset failed to decode any zones, fall back to Tone.js samples
+  if (!drumPreset || !drumPreset.zones || !drumPreset.zones.some(z => z.buffer)) {
+    console.warn('[WAF] Drum preset decode failed — loading Tone.js drum fallback');
+    drumPreset = null;
+    const toneBase = 'https://tonejs.github.io/audio/drum-samples/acoustic-kit/';
+    const drumMap = { kick: 'kick.mp3', snare: 'snare.mp3', hihat: 'hihat.mp3', open: 'hihat.mp3' };
+    console.log('[fallback] Fetching drum samples from:', toneBase, '— files:', Object.values(drumMap));
+    try {
+      const entries = await Promise.all(
+        Object.entries(drumMap).map(([name, file]) => {
+          const url = toneBase + file;
+          console.log('[fallback] fetch start:', name, url);
+          return fetch(url)
+            .then(r => {
+              console.log('[fallback] fetch response:', name, 'status:', r.status, 'ok:', r.ok, 'content-type:', r.headers.get('content-type'));
+              if (!r.ok) throw new Error(`HTTP ${r.status}`);
+              return r.arrayBuffer();
+            })
+            .then(ab => {
+              console.log('[fallback] arrayBuffer received:', name, 'byteLength:', ab.byteLength);
+              return new Promise((res, rej) =>
+                audioCtx.decodeAudioData(ab,
+                  buf => { console.log('[fallback] decodeAudioData OK:', name, 'duration:', buf.duration.toFixed(3), 's'); res([name, buf]); },
+                  err => { console.error('[fallback] decodeAudioData FAILED:', name, err); rej(err); }
+                )
+              );
+            })
+            .catch(e => { console.error('[fallback] Failed to load drum sample:', name, url, e); return [name, null]; });
+        })
+      );
+      drumBuffers = Object.fromEntries(entries.filter(([,b]) => b !== null));
+      console.log('[fallback] drumBuffers ready. Keys:', Object.keys(drumBuffers),
+        '| kick?', !!drumBuffers.kick, '| snare?', !!drumBuffers.snare,
+        '| hihat?', !!drumBuffers.hihat, '| open?', !!drumBuffers.open);
+    } catch(e) {
+      console.error('[fallback] Tone.js drum fallback failed:', e);
+    }
+  }
+
+  console.log('[WAF] All zones decoded. allPresetsDecoded()=', allPresetsDecoded());
+
+  if (genState && !isPlaying) {
+    statEl.textContent = `${g.name} · "${song.name}" · ${key} · ${totalBars} bars — ready`;
+    statEl.className = 'status';
+  }
 });
 
 // ── Playback ───────────────────────────────────────────────────────────────
@@ -687,72 +840,79 @@ playBtn.addEventListener('click', async () => {
 });
 
 async function startPlayback() {
-  await Tone.start();
+  if (!audioCtx) return;
+  if (audioCtx.state === 'suspended') await audioCtx.resume();
+
+  console.log('[WAF] startPlayback — ctx:', audioCtx.state,
+    '| decoded:', allPresetsDecoded(),
+    '| drum:', !!drumPreset, '| bass:', !!bassPreset,
+    '| guitar:', !!guitarPreset, '| keys:', !!keysPreset);
+
   const {key, genre, prog, totalBars} = genState;
-  const g = GENRES[genre];
-  const loop = totalBars + 'm';
+  const g   = GENRES[genre];
+  const bpm = +bpmSldr.value;
 
-  const T = Tone.getTransport();
-  T.bpm.value = +bpmSldr.value;
-  T.swing = g.swing; T.swingSubdivision = '8n';
-  T.position = 0;
+  // Compute timing
+  loopDurSec = totalBars * 4 * (60 / bpm);
+  allEvents  = buildAllEvents(prog, genre, key, bpm, g.swing);
 
-  // Update buses to current slider values
-  const pairs = [['drumVol',drumBus],['bassVol',bassBus],['guitarVol',guitarBus],
-                 ['keysVol',keysBus]];
-  pairs.forEach(([id,bus]) => {
-    const v = +$(id).value;
-    if (bus) bus.volume.value = v <= -40 ? -Infinity : v;
-  });
+  scheduleEvent._drumLogged = false; // reset per-play first-hit log
+  // Create and connect mixer gain nodes
+  drumGain   = audioCtx.createGain();
+  bassGain   = audioCtx.createGain();
+  guitarGain = audioCtx.createGain();
+  keysGain   = audioCtx.createGain();
 
-  // Drum sequences
-  const dp = g.drums;
-  const kickS  = new Tone.Sequence((t,v)=>v&&playDrum('kick',t),  dp.kick,  '16n');
-  const snareS = new Tone.Sequence((t,v)=>v&&playDrum('snare',t), dp.snare, '16n');
-  const hhatS  = new Tone.Sequence((t,v)=>v&&playDrum('hihat',t), dp.hihat, '16n');
-  drumSeqs = [kickS, snareS, hhatS];
-  drumSeqs.forEach(s => { s.loop=true; s.start(0); });
+  drumGain.gain.value   = dbToGain(+$('drumVol').value);
+  bassGain.gain.value   = dbToGain(+$('bassVol').value);
+  guitarGain.gain.value = dbToGain(+$('guitarVol').value);
+  keysGain.gain.value   = dbToGain(+$('keysVol').value);
 
-  // Bass part
-  bassPart = regS(new Tone.Part((t,e)=>bassSynth.triggerAttackRelease(e.note,e.dur,t), buildBass(prog,genre,key)));
-  bassPart.loop=true; bassPart.loopEnd=loop; bassPart.start(0);
+  [drumGain, bassGain, guitarGain, keysGain].forEach(gn => gn.connect(audioCtx.destination));
 
-  // Guitar part
-  guitarPart = regS(new Tone.Part((t,e)=>guitarSynth.triggerAttackRelease(e.notes,e.dur,t), buildGuitar(prog,genre,key)));
-  guitarPart.loop=true; guitarPart.loopEnd=loop; guitarPart.start(0);
+  console.log('[WAF] GainNodes connected. drumGain.gain=', drumGain.gain.value.toFixed(3),
+    'bassGain.gain=', bassGain.gain.value.toFixed(3));
 
-  // Keys part (piano sampler)
-  keysPart = regS(new Tone.Part((t,e)=>pianoSampler.triggerAttackRelease(e.notes,e.dur,t), buildKeys(prog,genre,key)));
-  keysPart.loop=true; keysPart.loopEnd=loop; keysPart.start(0);
+  // Small pre-roll so first scheduler call can fill the lookahead window
+  playStartTime = audioCtx.currentTime + 0.1;
+  nextEvIdx    = 0;
+  nextLoopTime = playStartTime;
 
-  // Chord highlight
-  hlPart = regS(new Tone.Part((t,e)=>Tone.getDraw().schedule(()=>setChip(e.idx),t), buildHL(prog)));
-  hlPart.loop=true; hlPart.loopEnd=loop; hlPart.start(0);
+  schedulerTimer = setInterval(runScheduler, 25);
+  runScheduler(); // prime immediately
 
-  T.start();
   isPlaying = true;
   playBtn.textContent = '⏸ Stop';
   playBtn.classList.add('is-playing');
-  const {genre:g2,song,key:k} = genState;
-  statEl.textContent = `Playing · ${GENRES[g2].name} · "${song.name}" · ${k} · ${+bpmSldr.value} BPM`;
+  statEl.textContent = `Playing · ${g.name} · "${genState.song.name}" · ${key} · ${bpm} BPM`;
   statEl.className = 'status on';
 }
 
 function stopPlayback() {
-  Tone.getTransport().stop();
-  disposeSeqs();
-  drumSeqs.forEach(s=>{try{s.stop();s.dispose();}catch(_){}});
-  drumSeqs = [];
-  isPlaying = false; setChip(-1);
-  playBtn.textContent = '▶ Play'; playBtn.classList.remove('is-playing');
+  if (schedulerTimer) { clearInterval(schedulerTimer); schedulerTimer = null; }
+  [drumGain, bassGain, guitarGain, keysGain].forEach(gn => {
+    if (gn) { try { gn.disconnect(); } catch(_) {} }
+  });
+  drumGain = bassGain = guitarGain = keysGain = null;
+
+  isPlaying = false;
+  setChip(-1);
+  playBtn.textContent = '▶ Play';
+  playBtn.classList.remove('is-playing');
   if (genState) {
-    const {genre,song,key,totalBars} = genState;
+    const {genre, song, key, totalBars} = genState;
     statEl.textContent = `${GENRES[genre].name} · "${song.name}" · ${key} · ${totalBars} bars`;
   }
   statEl.className = 'status';
 }
 
 // ── Init ───────────────────────────────────────────────────────────────────
+if (window.location.protocol === 'file:') {
+  statEl.textContent = '⚠ Open via a local server — run: python3 -m http.server 8000  then open http://localhost:8000';
+  statEl.className = 'status loading';
+  genBtn.disabled = true;
+  playBtn.disabled = true;
+}
 renderSongPicker('jazz');
 </script>
 </body>
