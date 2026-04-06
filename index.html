@@ -638,14 +638,14 @@ genBtn.addEventListener('click', async () => {
   keysBus   = reg(new Tone.Volume(g.defaultVols.keys).toDestination());
   hornsBus  = reg(new Tone.Volume(g.defaultVols.horns).toDestination());
 
-  // Drum sampler — use full URLs (Tone.Players doesn't support baseUrl option)
-  const DR = 'https://tonejs.github.io/audio/drum-rack/';
+  // Drum sampler — correct path is drum-samples/<kit>/, not drum-rack/
+  // Pick a kit that suits the genre
+  const kitName = {jazz:'acoustic-kit', blues:'acoustic-kit', rock:'LINN', jamband:'LINN', reggae:'CR78'}[genre] || 'acoustic-kit';
+  const DR = `https://tonejs.github.io/audio/drum-samples/${kitName}/`;
   drumPlayers = reg(new Tone.Players({
-    kick:    DR + 'kick.mp3',
-    snare:   DR + 'snare.mp3',
-    hihat:   DR + 'hihat.mp3',
-    openhat: DR + 'openhat.mp3',
-    rim:     DR + 'rim.mp3',
+    kick:  DR + 'kick.mp3',
+    snare: DR + 'snare.mp3',
+    hihat: DR + 'hihat.mp3',
   }).connect(drumBus));
 
   // Piano sampler (Salamander Grand)
@@ -758,8 +758,7 @@ async function startPlayback() {
   const kickS  = new Tone.Sequence((t,v)=>v&&playDrum('kick',t),  dp.kick,  '16n');
   const snareS = new Tone.Sequence((t,v)=>v&&playDrum('snare',t), dp.snare, '16n');
   const hhatS  = new Tone.Sequence((t,v)=>v&&playDrum('hihat',t), dp.hihat, '16n');
-  const openS  = new Tone.Sequence((t,v)=>v&&playDrum('openhat',t),dp.open, '16n');
-  drumSeqs = [kickS, snareS, hhatS, openS];
+  drumSeqs = [kickS, snareS, hhatS];
   drumSeqs.forEach(s => { s.loop=true; s.start(0); });
 
   // Bass part
