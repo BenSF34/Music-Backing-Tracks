@@ -622,18 +622,17 @@ genBtn.addEventListener('click', async () => {
     baseUrl: 'https://tonejs.github.io/audio/salamander/',
   }).connect(keysBus));
 
-  // Bass synth
-  const bassOscType = {jazz:'triangle',blues:'triangle',rock:'sawtooth',jamband:'triangle',reggae:'sine'}[genre];
-  bassSynth = reg(new Tone.Synth({
-    oscillator:{type:bassOscType},
-    envelope:{attack:0.02,decay:0.2,sustain:{jazz:0.65,reggae:0.85}[genre]??0.5,release:genre==='jazz'?0.9:0.3},
-    volume:2,
+  // Bass synth — Karplus-Strong plucked string
+  const bassDamp = {jazz:2000, blues:2400, rock:3200, jamband:2800, reggae:1600}[genre] ?? 2400;
+  const bassRes  = {jazz:0.97, blues:0.96, rock:0.95, jamband:0.96, reggae:0.98}[genre] ?? 0.96;
+  bassSynth = reg(new Tone.PluckSynth({
+    attackNoise: 1,
+    dampening: bassDamp,
+    resonance: bassRes,
+    volume: 6,
   }));
-  const bassLP = reg(new Tone.Filter({frequency:genre==='rock'?500:350,type:'lowpass'}).connect(bassBus));
-  if (genre==='rock') {
-    const bd = reg(new Tone.Distortion(0.2).connect(bassLP));
-    bassSynth.connect(bd);
-  } else { bassSynth.connect(bassLP); }
+  const bassLP = reg(new Tone.Filter({frequency:450, type:'lowpass', rolloff:-24}).connect(bassBus));
+  bassSynth.connect(bassLP);
 
   // Guitar synth
   const gOsc = {rock:'sawtooth',blues:'sawtooth',reggae:'square'}[genre] ?? 'triangle';
@@ -712,7 +711,7 @@ async function startPlayback() {
   drumSeqs.forEach(s => { s.loop=true; s.start(0); });
 
   // Bass part
-  bassPart = regS(new Tone.Part((t,e)=>bassSynth.triggerAttackRelease(e.note,e.dur,t), buildBass(prog,genre,key)));
+  bassPart = regS(new Tone.Part((t,e)=>bassSynth.triggerAttack(e.note,t), buildBass(prog,genre,key)));
   bassPart.loop=true; bassPart.loopEnd=loop; bassPart.start(0);
 
   // Guitar part
