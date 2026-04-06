@@ -413,22 +413,32 @@ function durToSec(durStr, bpm) {
 function p(bar, beat, s16 = 0) { return `${bar}:${beat}:${s16}`; }
 
 // ── Event builders ─────────────────────────────────────────────────────────
+
+// Clamp a bass MIDI note to the sample-covered range of the bass guitar preset.
+// Real bass guitar lowest string E1 = MIDI 28; keeping ceiling at 52 (E3) keeps
+// notes in the zone where the Aspirin soundfont has real samples.
+function clampBass(m) {
+  while (m > 52) m -= 12;
+  while (m < 28) m += 12;
+  return m;
+}
+
 function buildBass(prog, genre, key) {
   const ev = [];
   let bar = 0;
   prog.forEach((c, ci) => {
-    const root  = stMidi(key, c.st, 2);
-    const fifth = root + 7;
-    const next  = stMidi(key, prog[(ci+1)%prog.length].st, 2);
+    const root  = clampBass(stMidi(key, c.st, 2));
+    const fifth = clampBass(root + 7);
+    const next  = clampBass(stMidi(key, prog[(ci+1)%prog.length].st, 2));
     for (let b = 0; b < c.b; b++) {
       const last = b === c.b - 1;
       switch (genre) {
         case 'jazz': {
-          const app = last ? next + (next > root ? -1 : 1) : root + 7;
-          ev.push({time:p(bar,0),   midi:root,   dur:'4n'});
-          ev.push({time:p(bar,1),   midi:fifth,  dur:'4n'});
-          ev.push({time:p(bar,2),   midi:root+4, dur:'4n'});
-          ev.push({time:p(bar,3),   midi:app,    dur:'4n'});
+          const app = clampBass(last ? next + (next > root ? -1 : 1) : root + 7);
+          ev.push({time:p(bar,0),   midi:root,              dur:'4n'});
+          ev.push({time:p(bar,1),   midi:fifth,             dur:'4n'});
+          ev.push({time:p(bar,2),   midi:clampBass(root+4), dur:'4n'});
+          ev.push({time:p(bar,3),   midi:app,               dur:'4n'});
           break;
         }
         case 'blues': {
@@ -444,10 +454,10 @@ function buildBass(prog, genre, key) {
           break;
         }
         case 'jamband': {
-          ev.push({time:p(bar,0), midi:root,    dur:'4n'});
-          ev.push({time:p(bar,1), midi:fifth,   dur:'4n'});
-          ev.push({time:p(bar,2), midi:root+12, dur:'4n'});
-          ev.push({time:p(bar,3), midi:fifth,   dur:'4n'});
+          ev.push({time:p(bar,0), midi:root,              dur:'4n'});
+          ev.push({time:p(bar,1), midi:fifth,             dur:'4n'});
+          ev.push({time:p(bar,2), midi:clampBass(root+5), dur:'4n'}); // 4th instead of octave-up
+          ev.push({time:p(bar,3), midi:fifth,             dur:'4n'});
           break;
         }
         case 'reggae': {
@@ -692,8 +702,21 @@ function scheduleEvent(ev, absTime) {
       break;
     }
     case 'bass':
-      if (bassPreset && bassGain)
+      if (bassPreset && bassGain) {
+        if (!scheduleEvent._bassLogged) {
+          scheduleEvent._bassLogged = true;
+          const decodedZones = bassPreset.zones?.filter(z => z.buffer).length ?? 0;
+          console.log('[bass] First note scheduled — midi:', ev.midi, '| dur:', ev.durSec.toFixed(3),
+            '| gainValue:', bassGain.gain.value.toFixed(4),
+            '| zones decoded:', decodedZones, '/', bassPreset.zones?.length);
+        }
         wafPlayer.queueWaveTable(audioCtx, bassGain, bassPreset, absTime, ev.midi, ev.durSec, 1.0);
+      } else {
+        if (!scheduleEvent._bassLogged) {
+          scheduleEvent._bassLogged = true;
+          console.warn('[bass] Note skipped — bassPreset:', !!bassPreset, 'bassGain:', !!bassGain);
+        }
+      }
       break;
     case 'guitar':
       if (guitarPreset && guitarGain)
@@ -782,9 +805,23 @@ genBtn.addEventListener('click', async () => {
     keys:   !!keysPreset,   keysZones:   keysPreset?.zones?.length,
   });
 
+  if (bassPreset) {
+    const zoneRanges = bassPreset.zones?.map(z => `${z.midiLow}-${z.midiHigh}`).join(', ');
+    console.log('[bass] Preset assigned — zones:', bassPreset.zones?.length, '| MIDI ranges:', zoneRanges);
+  } else {
+    console.error('[bass] Preset NOT assigned — _tone_0330_Aspirin_sf2_file is', window._tone_0330_Aspirin_sf2_file);
+  }
+
   // Explicitly decode all zone buffers — this is the step the WAF loader
   // skips over (it fires waitLoad before decodeAudioData completes).
   await Promise.all([drumPreset, bassPreset, guitarPreset, keysPreset].map(decodePreset));
+
+  if (bassPreset) {
+    const decoded = bassPreset.zones?.filter(z => z.buffer).length ?? 0;
+    const total   = bassPreset.zones?.length ?? 0;
+    console.log('[bass] Zones decoded:', decoded, '/', total,
+      decoded === total ? '✓ all OK' : '⚠ some zones failed');
+  }
 
   // If WAF drum preset failed to decode any zones, fall back to Tone.js samples
   if (!drumPreset || !drumPreset.zones || !drumPreset.zones.some(z => z.buffer)) {
@@ -856,7 +893,8 @@ async function startPlayback() {
   loopDurSec = totalBars * 4 * (60 / bpm);
   allEvents  = buildAllEvents(prog, genre, key, bpm, g.swing);
 
-  scheduleEvent._drumLogged = false; // reset per-play first-hit log
+  scheduleEvent._drumLogged = false;  // reset per-play first-hit log
+  scheduleEvent._bassLogged = false;
   // Create and connect mixer gain nodes
   drumGain   = audioCtx.createGain();
   bassGain   = audioCtx.createGain();
