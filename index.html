@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Backing Track Generator</title>
   <script src="https://surikov.github.io/webaudiofont/npm/dist/WebAudioFontPlayer.js"></script>
-  <script src="https://unpkg.com/tone@14/build/Tone.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
@@ -351,8 +350,8 @@ let wafPlayer = null;
 let drumPreset = null, keysPreset = null;
 // Fallback drum buffers loaded from Tone.js samples when WAF drum preset fails
 let drumBuffers = null; // { kick, snare, hihat, open } AudioBuffer map
-// Tone.js Sampler instances for bass and guitar
-let bassToneSampler = null, guitarToneSampler = null;
+// Gleitz soundfont samplers: { buffers: Map<midi, AudioBuffer>, sortedMidis: int[] }
+let bassSampler = null, guitarCleanSampler = null, guitarJazzSampler = null;
 
 // Mixer gain nodes (created fresh each Play, released each Stop)
 let drumGain = null, bassGain = null, guitarGain = null, keysGain = null;
@@ -622,12 +621,80 @@ function clampGuitar(m) {
   return m;
 }
 
-// ── Tone.js sampler helpers ────────────────────────────────────────────────
+// ── Gleitz soundfont sampler helpers ──────────────────────────────────────
 
-// Convert a MIDI number to a Tone.js note name (e.g. 69 → "A4", 60 → "C4").
-function midiToToneNote(midi) {
-  const names = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
-  return names[midi % 12] + (Math.floor(midi / 12) - 1);
+// Convert a gleitz note name (e.g. "C#4", "Bb3", "A0") to MIDI number.
+function noteNameToMidi(name) {
+  const m = name.match(/^([A-G])([#b]?)(-?\d+)$/);
+  if (!m) return null;
+  const [, letter, acc, octStr] = m;
+  const base  = {C:0,D:2,E:4,F:5,G:7,A:9,B:11}[letter];
+  const shift = acc === '#' ? 1 : acc === 'b' ? -1 : 0;
+  return (parseInt(octStr) + 1) * 12 + base + shift;
+}
+
+// Decode a gleitz MIDI.Soundfont.* object into a sampler map.
+// Loads only notes whose MIDI number falls within [midiMin, midiMax].
+async function loadGleitzSoundfont(sfObj, midiMin, midiMax) {
+  const toLoad = Object.entries(sfObj)
+    .map(([name, uri]) => [noteNameToMidi(name), uri])
+    .filter(([midi]) => midi !== null && midi >= midiMin && midi <= midiMax);
+
+  if (!toLoad.length) {
+    console.warn('[sampler] No notes in MIDI range', midiMin, '-', midiMax);
+    return null;
+  }
+
+  const decoded = await Promise.all(toLoad.map(([midi, uri]) =>
+    fetch(uri)
+      .then(r => r.arrayBuffer())
+      .then(ab => audioCtx.decodeAudioData(ab))
+      .then(buf => [midi, buf])
+      .catch(e => { console.warn('[sampler] decode failed for MIDI', midi, e); return null; })
+  ));
+
+  const buffers     = new Map(decoded.filter(Boolean));
+  const sortedMidis = [...buffers.keys()].sort((a, b) => a - b);
+  console.log('[sampler] Ready —', buffers.size, 'samples, MIDI',
+    sortedMidis[0], '–', sortedMidis[sortedMidis.length - 1]);
+  return { buffers, sortedMidis };
+}
+
+// Play one note from a sampler: nearest-neighbor sample + playbackRate pitch shift.
+// Envelope: 5 ms attack, sustain until durSec, 40 ms linear release.
+function playSamplerNote(sampler, midi, absTime, durSec, outputNode) {
+  if (!sampler?.sortedMidis?.length) return;
+
+  // Binary search for nearest MIDI
+  const midis = sampler.sortedMidis;
+  let lo = 0, hi = midis.length - 1;
+  while (lo < hi) {
+    const m = (lo + hi) >> 1;
+    if (midis[m] < midi) lo = m + 1; else hi = m;
+  }
+  const nearest = (lo > 0 && Math.abs(midis[lo-1] - midi) <= Math.abs(midis[lo] - midi))
+    ? midis[lo-1] : midis[lo];
+
+  const buf = sampler.buffers.get(nearest);
+  if (!buf) return;
+
+  const src = audioCtx.createBufferSource();
+  src.buffer = buf;
+  src.playbackRate.value = Math.pow(2, (midi - nearest) / 12);
+
+  const env = audioCtx.createGain();
+  const t0  = absTime;
+  env.gain.setValueAtTime(0, t0);
+  env.gain.linearRampToValueAtTime(1, t0 + 0.005);            // 5 ms attack
+  const releaseAt = t0 + Math.max(durSec, 0.05);
+  env.gain.setValueAtTime(1, releaseAt);
+  env.gain.linearRampToValueAtTime(0, releaseAt + 0.04);      // 40 ms release
+
+  src.connect(env);
+  env.connect(outputNode);
+  src.start(t0);
+  src.stop(releaseAt + 0.04 + 0.01);
+  src.onended = () => { try { src.disconnect(); env.disconnect(); } catch(_) {} };
 }
 
 function buildGuitar(prog, genre, key) {
@@ -853,7 +920,7 @@ function decodePreset(preset) {
 }
 
 // Returns true when WAF drum and keys presets are fully decoded.
-// Bass and guitar use Tone.js Samplers which load independently.
+// Bass and guitar use gleitz samplers which load independently.
 function allPresetsDecoded() {
   const ok = p => !p || (p.zones && p.zones.every(z => z.buffer));
   const drumReady = drumBuffers !== null || ok(drumPreset);
@@ -899,39 +966,38 @@ function scheduleEvent(ev, absTime) {
       break;
     }
     case 'bass':
-      if (bassToneSampler && bassGain) {
+      if (bassSampler && bassGain) {
         if (!scheduleEvent._bassLogged) {
           scheduleEvent._bassLogged = true;
-          console.log('[bass] First note — Tone.Sampler',
-            '| note:', midiToToneNote(ev.midi), '| midi:', ev.midi,
+          console.log('[bass] First note — gleitz sampler | midi:', ev.midi,
             '| dur:', ev.durSec.toFixed(3),
             '| absTime:', absTime.toFixed(3),
-            '| audioCtx.currentTime:', audioCtx.currentTime.toFixed(3),
             '| ahead:', (absTime - audioCtx.currentTime).toFixed(3), 's');
         }
-        bassToneSampler.triggerAttackRelease(midiToToneNote(ev.midi), ev.durSec, absTime);
+        playSamplerNote(bassSampler, ev.midi, absTime, ev.durSec, bassGain);
       } else {
         if (!scheduleEvent._bassLogged) {
           scheduleEvent._bassLogged = true;
-          console.warn('[bass] Note skipped — bassToneSampler:', !!bassToneSampler, 'bassGain:', !!bassGain);
+          console.warn('[bass] Note skipped — bassSampler:', !!bassSampler, 'bassGain:', !!bassGain);
         }
       }
       break;
-    case 'guitar':
-      if (guitarToneSampler && guitarGain) {
+    case 'guitar': {
+      const genre = genState?.genre;
+      const sampler = (genre === 'jazz' || genre === 'reggae') ? guitarJazzSampler : guitarCleanSampler;
+      if (sampler && guitarGain) {
         if (!scheduleEvent._guitarLogged) {
           scheduleEvent._guitarLogged = true;
-          console.log('[guitar] First chord — Tone.Sampler | genre:', genState?.genre,
-            '| notes:', ev.midis.map(midiToToneNote),
+          console.log('[guitar] First chord — gleitz sampler | genre:', genre,
+            '| midis:', ev.midis,
             '| dur:', ev.durSec.toFixed(3),
             '| absTime:', absTime.toFixed(3),
-            '| audioCtx.currentTime:', audioCtx.currentTime.toFixed(3),
             '| ahead:', (absTime - audioCtx.currentTime).toFixed(3), 's');
         }
-        ev.midis.forEach(m =>
-          guitarToneSampler.triggerAttackRelease(midiToToneNote(m), ev.durSec, absTime));
+        ev.midis.forEach(m => playSamplerNote(sampler, m, absTime, ev.durSec, guitarGain));
       }
       break;
+    }
     case 'keys':
       if (keysPreset && keysGain)
         ev.midis.forEach(m =>
@@ -980,21 +1046,23 @@ async function generateTrack(key, genre, prog, songName) {
   if (!audioCtx) {
     audioCtx  = new (window.AudioContext || window.webkitAudioContext)();
     wafPlayer = new WebAudioFontPlayer();
-    Tone.setContext(audioCtx); // Share AudioContext with Tone.js — MUST be before any new Tone.Sampler()
-    console.log('[load] Tone.setContext(audioCtx) called ✓ — sampleRate:', audioCtx.sampleRate);
   }
   await audioCtx.resume();
   console.log('[load] AudioContext state after resume:', audioCtx.state);
 
-  // Load WAF presets for drums + keys in parallel with Tone.js sampler creation
-  const wafBase = 'https://surikov.github.io/webaudiofontdata/sound/';
+  // Load WAF presets (drums + keys) and gleitz soundfonts (bass + guitar) in parallel
+  const wafBase    = 'https://surikov.github.io/webaudiofontdata/sound/';
+  const gleitzBase = 'https://gleitz.github.io/midi-js-soundfonts/';
   try {
     await Promise.all([
-      loadScript(wafBase + '12836_0_JCLive_sf2_file.js'),
-      loadScript(wafBase + '0000_JCLive_sf2_file.js'),
+      loadScript(wafBase    + '12836_0_JCLive_sf2_file.js'),
+      loadScript(wafBase    + '0000_JCLive_sf2_file.js'),
+      loadScript(gleitzBase + 'FluidR3_GM/electric_bass_finger-mp3.js'),
+      loadScript(gleitzBase + 'MusyngKite/electric_guitar_clean-mp3.js'),
+      loadScript(gleitzBase + 'MusyngKite/electric_guitar_jazz-mp3.js'),
     ]);
   } catch(e) {
-    console.error('[load] A WAF preset script failed to load:', e);
+    console.error('[load] A sample script failed to load:', e);
   }
 
   // Assign WAF presets — drum bank files sometimes use _drum_ prefix instead of _tone_
@@ -1008,53 +1076,18 @@ async function generateTrack(key, genre, prog, songName) {
     keys: !!keysPreset, keysZones: keysPreset?.zones?.length,
   });
 
-  // Create Tone.js Samplers for bass and guitar (skipped on subsequent generateTrack calls)
-  const nbBase = 'https://nbrosowsky.github.io/tonejs-instruments/samples/';
-  if (!bassToneSampler) {
-    bassToneSampler = new Tone.Sampler({
-      urls: {
-        A1:'A1.mp3', A2:'A2.mp3', A3:'A3.mp3',
-        C2:'C2.mp3', C3:'C3.mp3',
-        E1:'E1.mp3', E2:'E2.mp3', E3:'E3.mp3',
-        G1:'G1.mp3', G2:'G2.mp3',
-      },
-      baseUrl: nbBase + 'bass-electric/',
-    });
-    console.log('[bass] Tone.Sampler created');
+  // Build gleitz samplers (skipped if already loaded from a previous generateTrack call)
+  if (!bassSampler && window.MIDI?.Soundfont?.electric_bass_finger) {
+    bassSampler = await loadGleitzSoundfont(window.MIDI.Soundfont.electric_bass_finger, 20, 60);
+    console.log('[bass] gleitz sampler ready:', !!bassSampler);
   }
-  if (!guitarToneSampler) {
-    guitarToneSampler = new Tone.Sampler({
-      urls: {
-        A2:'A2.mp3', A3:'A3.mp3', A4:'A4.mp3',
-        C3:'C3.mp3', C4:'C4.mp3',
-        E2:'E2.mp3', E3:'E3.mp3', E4:'E4.mp3',
-        G2:'G2.mp3', G3:'G3.mp3',
-      },
-      baseUrl: nbBase + 'guitar-electric/',
-    });
-    console.log('[guitar] Tone.Sampler created');
+  if (!guitarCleanSampler && window.MIDI?.Soundfont?.electric_guitar_clean) {
+    guitarCleanSampler = await loadGleitzSoundfont(window.MIDI.Soundfont.electric_guitar_clean, 36, 84);
+    console.log('[guitar clean] gleitz sampler ready:', !!guitarCleanSampler);
   }
-
-  // Wait for all Tone.js samples to finish downloading and decoding.
-  // Race against a 10-second timeout so a failed fetch doesn't hang silently.
-  console.log('[load] Waiting for Tone.loaded()…');
-  try {
-    await Promise.race([
-      Tone.loaded(),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Tone.loaded() timed out after 10 s')), 10_000)
-      ),
-    ]);
-    console.log('[load] Tone.loaded() resolved ✓',
-      '| bassToneSampler:', !!bassToneSampler,
-      '| guitarToneSampler:', !!guitarToneSampler);
-  } catch (e) {
-    console.error('[load] ✗', e.message);
-    // Probe a single sample file to surface CORS / 404 errors in the network tab
-    const probeUrl = 'https://nbrosowsky.github.io/tonejs-instruments/samples/bass-electric/A1.mp3';
-    fetch(probeUrl, {method:'HEAD'})
-      .then(r => console.error('[load] HEAD probe', probeUrl, '→ HTTP', r.status, r.ok ? 'OK' : 'FAIL'))
-      .catch(err => console.error('[load] HEAD probe failed (likely CORS):', err.message));
+  if (!guitarJazzSampler && window.MIDI?.Soundfont?.electric_guitar_jazz) {
+    guitarJazzSampler = await loadGleitzSoundfont(window.MIDI.Soundfont.electric_guitar_jazz, 36, 84);
+    console.log('[guitar jazz] gleitz sampler ready:', !!guitarJazzSampler);
   }
 
   // If WAF drum preset failed to decode any zones, fall back to Tone.js samples
@@ -1097,7 +1130,7 @@ async function generateTrack(key, genre, prog, songName) {
   }
 
   console.log('[load] allPresetsDecoded()=', allPresetsDecoded(),
-    '| bass:', !!bassToneSampler, '| guitar:', !!guitarToneSampler);
+    '| bass:', !!bassSampler, '| guitarClean:', !!guitarCleanSampler, '| guitarJazz:', !!guitarJazzSampler);
 
   if (genState && !isPlaying) {
     statEl.textContent = `${g.name} · "${songName}" · ${key} · ${totalBars} bars — ready`;
@@ -1232,7 +1265,7 @@ async function startPlayback() {
 
   console.log('[play] startPlayback — ctx:', audioCtx.state,
     '| drum:', !!drumPreset || !!drumBuffers,
-    '| bass:', !!bassToneSampler, '| guitar:', !!guitarToneSampler,
+    '| bass:', !!bassSampler, '| guitarClean:', !!guitarCleanSampler, '| guitarJazz:', !!guitarJazzSampler,
     '| keys:', !!keysPreset);
 
   const {key, genre, prog, totalBars} = genState;
@@ -1260,24 +1293,7 @@ async function startPlayback() {
 
   [drumGain, bassGain, guitarGain, keysGain].forEach(gn => gn.connect(audioCtx.destination));
 
-  // Reconnect Tone.js samplers to the freshly created gain nodes.
-  // This runs in startPlayback(), which is called after generateTrack() → Tone.loaded() has resolved.
-  if (bassToneSampler) {
-    try { bassToneSampler.disconnect(); } catch(_) {}
-    bassToneSampler.connect(bassGain);
-    console.log('[play] bassToneSampler → bassGain connected ✓ (bassGain.gain =', bassGain.gain.value.toFixed(4), ')');
-  } else {
-    console.warn('[play] bassToneSampler is null — bass will be silent');
-  }
-  if (guitarToneSampler) {
-    try { guitarToneSampler.disconnect(); } catch(_) {}
-    guitarToneSampler.connect(guitarGain);
-    console.log('[play] guitarToneSampler → guitarGain connected ✓ (guitarGain.gain =', guitarGain.gain.value.toFixed(4), ')');
-  } else {
-    console.warn('[play] guitarToneSampler is null — guitar will be silent');
-  }
-
-  console.log('[load] GainNodes connected. drumGain.gain=', drumGain.gain.value.toFixed(3),
+  console.log('[play] GainNodes connected. drumGain.gain=', drumGain.gain.value.toFixed(3),
     'bassGain.gain=', bassGain.gain.value.toFixed(3));
 
   // Small pre-roll so first scheduler call can fill the lookahead window
