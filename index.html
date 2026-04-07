@@ -332,9 +332,11 @@ const GENRES = {
 // ── Audio engine ───────────────────────────────────────────────────────────
 let audioCtx  = null;
 let wafPlayer = null;
-let drumPreset = null, bassPreset = null, keysPreset = null;
+let drumPreset = null, keysPreset = null;
 // Fallback drum buffers loaded from Tone.js samples when WAF drum preset fails
 let drumBuffers = null; // { kick, snare, hihat, open } AudioBuffer map
+// Gleitz soundfont samplers: { buffers: Map<midi, AudioBuffer>, sortedMidis: int[] }
+let bassSampler = null, guitarCleanSampler = null, guitarJazzSampler = null;
 
 // Mixer gain nodes (created fresh each Play, released each Stop)
 let drumGain = null, bassGain = null, guitarGain = null, keysGain = null;
@@ -507,9 +509,7 @@ function p(bar, beat, s16 = 0) { return `${bar}:${beat}:${s16}`; }
 
 // ── Event builders ─────────────────────────────────────────────────────────
 
-// Clamp a bass MIDI note to the sample-covered range of the bass guitar preset.
-// Real bass guitar lowest string E1 = MIDI 28; keeping ceiling at 52 (E3) keeps
-// notes in the zone where the Aspirin soundfont has real samples.
+// Clamp a bass MIDI note to playable range of the gleitz bass guitar sampler (E1–E3).
 function clampBass(m) {
   while (m > 52) m -= 12;
   while (m < 28) m += 12;
@@ -573,67 +573,80 @@ function clampGuitar(m) {
   return m;
 }
 
-// ── Karplus-Strong plucked string synthesis ────────────────────────────────
-// Pre-computed soft-clip distortion curve for rock tone.
-// ── Guitar: triangle-oscillator synth ─────────────────────────────────────
-// No feedback loops or delay nodes — envelope-only decay, no risk of howling.
-const GUITAR_PARAMS = {
-  jazz:    { cutoff: 1800, dist: false },
-  blues:   { cutoff: 2200, dist: false },
-  rock:    { cutoff: 3000, dist: true  },
-  jamband: { cutoff: 2000, dist: false },
-  reggae:  { cutoff: 1600, dist: false },
-};
+// ── Gleitz soundfont sampler helpers ──────────────────────────────────────
 
-// Soft-clip curve for rock (amount 10 = very mild).
-const GUITAR_DIST_CURVE = (() => {
-  const n = 256, k = 10, out = new Float32Array(n);
-  for (let i = 0; i < n; i++) {
-    const x = (i * 2) / n - 1;
-    out[i] = (Math.PI + k) * x / (Math.PI + k * Math.abs(x));
+// Convert a gleitz note name (e.g. "C#4", "Bb3", "A0") to MIDI number.
+function noteNameToMidi(name) {
+  const m = name.match(/^([A-G])([#b]?)(-?\d+)$/);
+  if (!m) return null;
+  const [, letter, acc, octStr] = m;
+  const base  = {C:0,D:2,E:4,F:5,G:7,A:9,B:11}[letter];
+  const shift = acc === '#' ? 1 : acc === 'b' ? -1 : 0;
+  return (parseInt(octStr) + 1) * 12 + base + shift;
+}
+
+// Decode a gleitz MIDI.Soundfont.* object into a sampler map.
+// Loads only notes whose MIDI number falls within [midiMin, midiMax].
+async function loadGleitzSoundfont(sfObj, midiMin, midiMax) {
+  const toLoad = Object.entries(sfObj)
+    .map(([name, uri]) => [noteNameToMidi(name), uri])
+    .filter(([midi]) => midi !== null && midi >= midiMin && midi <= midiMax);
+
+  if (!toLoad.length) {
+    console.warn('[sampler] No notes in MIDI range', midiMin, '-', midiMax);
+    return null;
   }
-  return out;
-})();
 
-// Play one guitar note: triangle osc → lowpass → [waveshaper] → gain envelope → output.
-// ADSR: attack 2 ms, decay 400 ms, sustain 0, release 100 ms.
-// Output capped at 0.2 before hitting the mixer gainNode.
-function playGuitar(freq, absTime, genre, outputNode) {
-  const { cutoff, dist } = GUITAR_PARAMS[genre] ?? GUITAR_PARAMS.jamband;
+  const decoded = await Promise.all(toLoad.map(([midi, uri]) =>
+    fetch(uri)
+      .then(r => r.arrayBuffer())
+      .then(ab => audioCtx.decodeAudioData(ab))
+      .then(buf => [midi, buf])
+      .catch(e => { console.warn('[sampler] decode failed for MIDI', midi, e); return null; })
+  ));
 
-  const osc = audioCtx.createOscillator();
-  osc.type = 'triangle';
-  osc.frequency.value = freq;
+  const buffers     = new Map(decoded.filter(Boolean));
+  const sortedMidis = [...buffers.keys()].sort((a, b) => a - b);
+  console.log('[sampler] Ready —', buffers.size, 'samples, MIDI',
+    sortedMidis[0], '–', sortedMidis[sortedMidis.length - 1]);
+  return { buffers, sortedMidis };
+}
 
-  const lpf = audioCtx.createBiquadFilter();
-  lpf.type            = 'lowpass';
-  lpf.frequency.value = cutoff;
-  lpf.Q.value         = 0.5;
+// Play one note from a sampler: nearest-neighbor sample + playbackRate pitch shift.
+// Envelope: 5 ms attack, sustain until durSec, 40 ms linear release.
+function playSamplerNote(sampler, midi, absTime, durSec, outputNode) {
+  if (!sampler?.sortedMidis?.length) return;
 
-  const shaper = dist ? audioCtx.createWaveShaper() : null;
-  if (shaper) { shaper.curve = GUITAR_DIST_CURVE; shaper.oversample = '2x'; }
+  // Binary search for nearest MIDI
+  const midis = sampler.sortedMidis;
+  let lo = 0, hi = midis.length - 1;
+  while (lo < hi) {
+    const m = (lo + hi) >> 1;
+    if (midis[m] < midi) lo = m + 1; else hi = m;
+  }
+  const nearest = (lo > 0 && Math.abs(midis[lo-1] - midi) <= Math.abs(midis[lo] - midi))
+    ? midis[lo-1] : midis[lo];
 
-  // Gain envelope: 0 → 0.2 in 2 ms, then decay to 0 over 400 ms, release 100 ms.
+  const buf = sampler.buffers.get(nearest);
+  if (!buf) return;
+
+  const src = audioCtx.createBufferSource();
+  src.buffer = buf;
+  src.playbackRate.value = Math.pow(2, (midi - nearest) / 12);
+
   const env = audioCtx.createGain();
   const t0  = absTime;
-  env.gain.setValueAtTime(0,   t0);
-  env.gain.linearRampToValueAtTime(0.5, t0 + 0.002);  // attack
-  env.gain.exponentialRampToValueAtTime(0.001, t0 + 0.002 + 0.4); // decay to ~0
-  env.gain.linearRampToValueAtTime(0,    t0 + 0.002 + 0.4 + 0.1); // release
+  env.gain.setValueAtTime(0, t0);
+  env.gain.linearRampToValueAtTime(1, t0 + 0.005);            // 5 ms attack
+  const releaseAt = t0 + Math.max(durSec, 0.05);
+  env.gain.setValueAtTime(1, releaseAt);
+  env.gain.linearRampToValueAtTime(0, releaseAt + 0.04);      // 40 ms release
 
-  const stopAt = t0 + 0.002 + 0.4 + 0.1 + 0.02; // small buffer past release
-
-  // Graph: osc → lpf → [shaper] → env → outputNode
-  osc.connect(lpf);
-  if (shaper) { lpf.connect(shaper); shaper.connect(env); }
-  else        { lpf.connect(env); }
+  src.connect(env);
   env.connect(outputNode);
-
-  osc.start(absTime);
-  osc.stop(stopAt);
-  osc.onended = () => {
-    try { osc.disconnect(); lpf.disconnect(); shaper?.disconnect(); env.disconnect(); } catch(_) {}
-  };
+  src.start(t0);
+  src.stop(releaseAt + 0.04 + 0.01);
+  src.onended = () => { try { src.disconnect(); env.disconnect(); } catch(_) {} };
 }
 
 function buildGuitar(prog, genre, key) {
@@ -858,11 +871,12 @@ function decodePreset(preset) {
   }));
 }
 
-// Returns true when every loaded preset has all zones decoded.
+// Returns true when WAF drum and keys presets are fully decoded.
+// Bass and guitar use gleitz samplers which load independently.
 function allPresetsDecoded() {
   const ok = p => !p || (p.zones && p.zones.every(z => z.buffer));
   const drumReady = drumBuffers !== null || ok(drumPreset);
-  return drumReady && ok(bassPreset) && ok(keysPreset);
+  return drumReady && ok(keysPreset);
 }
 
 // ── Lookahead scheduler ────────────────────────────────────────────────────
@@ -896,36 +910,34 @@ function scheduleEvent(ev, absTime) {
       break;
     }
     case 'bass':
-      if (bassPreset && bassGain) {
+      if (bassSampler && bassGain) {
         if (!scheduleEvent._bassLogged) {
           scheduleEvent._bassLogged = true;
-          const decodedZones = bassPreset.zones?.filter(z => z.buffer).length ?? 0;
-          console.log('[bass] First note scheduled — midi:', ev.midi, '| dur:', ev.durSec.toFixed(3),
-            '| gainValue:', bassGain.gain.value.toFixed(4),
-            '| zones decoded:', decodedZones, '/', bassPreset.zones?.length);
+          console.log('[bass] First note — gleitz sampler | midi:', ev.midi,
+            '| dur:', ev.durSec.toFixed(3), '| gain:', bassGain.gain.value.toFixed(4));
         }
-        wafPlayer.queueWaveTable(audioCtx, bassGain, bassPreset, absTime, ev.midi, ev.durSec, 1.0);
+        playSamplerNote(bassSampler, ev.midi, absTime, ev.durSec, bassGain);
       } else {
         if (!scheduleEvent._bassLogged) {
           scheduleEvent._bassLogged = true;
-          console.warn('[bass] Note skipped — bassPreset:', !!bassPreset, 'bassGain:', !!bassGain);
+          console.warn('[bass] Note skipped — bassSampler:', !!bassSampler, 'bassGain:', !!bassGain);
         }
       }
       break;
-    case 'guitar':
-      if (guitarGain) {
+    case 'guitar': {
+      const genre = genState?.genre;
+      const sampler = (genre === 'jazz' || genre === 'reggae') ? guitarJazzSampler : guitarCleanSampler;
+      if (sampler && guitarGain) {
         if (!scheduleEvent._guitarLogged) {
           scheduleEvent._guitarLogged = true;
-          console.log('[guitar] First chord — triangle osc | genre:', genState?.genre,
-            '| midis:', ev.midis,
-            '| params:', GUITAR_PARAMS[genState?.genre] ?? GUITAR_PARAMS.jamband);
+          console.log('[guitar] First chord — gleitz sampler | genre:', genre,
+            '| preset:', genre === 'jazz' || genre === 'reggae' ? 'jazz' : 'clean',
+            '| midis:', ev.midis);
         }
-        ev.midis.forEach(m => {
-          const freq = 440 * Math.pow(2, (m - 69) / 12);
-          playGuitar(freq, absTime, genState.genre, guitarGain);
-        });
+        ev.midis.forEach(m => playSamplerNote(sampler, m, absTime, ev.durSec, guitarGain));
       }
       break;
+    }
     case 'keys':
       if (keysPreset && keysGain)
         ev.midis.forEach(m =>
@@ -978,46 +990,48 @@ async function generateTrack(key, genre, prog, songName) {
   await audioCtx.resume();
   console.log('[WAF] AudioContext state after resume:', audioCtx.state);
 
-  // Load all four preset scripts in parallel
-  const base = 'https://surikov.github.io/webaudiofontdata/sound/';
+  // Load WAF presets for drums + keys, and gleitz soundfonts for bass + guitar — all in parallel
+  const wafBase   = 'https://surikov.github.io/webaudiofontdata/sound/';
+  const gleitzBase = 'https://gleitz.github.io/midi-js-soundfonts/';
   try {
     await Promise.all([
-      loadScript(base + '12836_0_JCLive_sf2_file.js'),
-      loadScript(base + '0330_Aspirin_sf2_file.js'),
-      loadScript(base + '0000_JCLive_sf2_file.js'),
+      loadScript(wafBase   + '12836_0_JCLive_sf2_file.js'),
+      loadScript(wafBase   + '0000_JCLive_sf2_file.js'),
+      loadScript(gleitzBase + 'FluidR3_GM/electric_bass_finger-mp3.js'),
+      loadScript(gleitzBase + 'MusyngKite/electric_guitar_clean-mp3.js'),
+      loadScript(gleitzBase + 'MusyngKite/electric_guitar_jazz-mp3.js'),
     ]);
   } catch(e) {
-    console.error('[WAF] A preset script failed to load:', e);
+    console.error('[load] A sample script failed to load:', e);
   }
 
-  // Assign presets — drum bank files sometimes use _drum_ prefix instead of _tone_
-  drumPreset   = window._tone_12836_0_JCLive_sf2_file || window._drum_12836_0_JCLive_sf2_file || drumPreset;
-  bassPreset   = window._tone_0330_Aspirin_sf2_file   || bassPreset;
-  keysPreset   = window._tone_0000_JCLive_sf2_file    || keysPreset;
+  // Assign WAF presets — drum bank files sometimes use _drum_ prefix instead of _tone_
+  drumPreset = window._tone_12836_0_JCLive_sf2_file || window._drum_12836_0_JCLive_sf2_file || drumPreset;
+  keysPreset = window._tone_0000_JCLive_sf2_file    || keysPreset;
 
-  console.log('[WAF] Presets assigned:', {
+  console.log('[load] Scripts executed:', {
     drum: !!drumPreset, drumZones: drumPreset?.zones?.length,
-    bass: !!bassPreset, bassZones: bassPreset?.zones?.length,
     keys: !!keysPreset, keysZones: keysPreset?.zones?.length,
-    guitar: 'Karplus-Strong (no preset)',
+    bassGleitz:   !!(window.MIDI?.Soundfont?.electric_bass_finger),
+    guitarClean:  !!(window.MIDI?.Soundfont?.electric_guitar_clean),
+    guitarJazz:   !!(window.MIDI?.Soundfont?.electric_guitar_jazz),
   });
 
-  if (bassPreset) {
-    const zoneRanges = bassPreset.zones?.map(z => `${z.midiLow}-${z.midiHigh}`).join(', ');
-    console.log('[bass] Preset assigned — zones:', bassPreset.zones?.length, '| MIDI ranges:', zoneRanges);
-  } else {
-    console.error('[bass] Preset NOT assigned — _tone_0330_Aspirin_sf2_file is', window._tone_0330_Aspirin_sf2_file);
+  // Decode WAF zone buffers for drum + keys
+  await Promise.all([drumPreset, keysPreset].map(decodePreset));
+
+  // Build gleitz samplers (skipped if already loaded from a previous generateTrack call)
+  if (!bassSampler && window.MIDI?.Soundfont?.electric_bass_finger) {
+    bassSampler = await loadGleitzSoundfont(window.MIDI.Soundfont.electric_bass_finger, 20, 60);
+    console.log('[bass] gleitz sampler ready:', !!bassSampler);
   }
-
-  // Explicitly decode all zone buffers — this is the step the WAF loader
-  // skips over (it fires waitLoad before decodeAudioData completes).
-  await Promise.all([drumPreset, bassPreset, keysPreset].map(decodePreset));
-
-  if (bassPreset) {
-    const decoded = bassPreset.zones?.filter(z => z.buffer).length ?? 0;
-    const total   = bassPreset.zones?.length ?? 0;
-    console.log('[bass] Zones decoded:', decoded, '/', total,
-      decoded === total ? '✓ all OK' : '⚠ some zones failed');
+  if (!guitarCleanSampler && window.MIDI?.Soundfont?.electric_guitar_clean) {
+    guitarCleanSampler = await loadGleitzSoundfont(window.MIDI.Soundfont.electric_guitar_clean, 36, 84);
+    console.log('[guitar clean] gleitz sampler ready:', !!guitarCleanSampler);
+  }
+  if (!guitarJazzSampler && window.MIDI?.Soundfont?.electric_guitar_jazz) {
+    guitarJazzSampler = await loadGleitzSoundfont(window.MIDI.Soundfont.electric_guitar_jazz, 36, 84);
+    console.log('[guitar jazz] gleitz sampler ready:', !!guitarJazzSampler);
   }
 
   // If WAF drum preset failed to decode any zones, fall back to Tone.js samples
@@ -1059,7 +1073,9 @@ async function generateTrack(key, genre, prog, songName) {
     }
   }
 
-  console.log('[WAF] All zones decoded. allPresetsDecoded()=', allPresetsDecoded());
+  console.log('[load] allPresetsDecoded()=', allPresetsDecoded(),
+    '| bassSampler:', !!bassSampler,
+    '| guitarClean:', !!guitarCleanSampler, '| guitarJazz:', !!guitarJazzSampler);
 
   if (genState && !isPlaying) {
     statEl.textContent = `${g.name} · "${songName}" · ${key} · ${totalBars} bars — ready`;
@@ -1183,10 +1199,11 @@ async function startPlayback() {
   if (!audioCtx) return;
   if (audioCtx.state === 'suspended') await audioCtx.resume();
 
-  console.log('[WAF] startPlayback — ctx:', audioCtx.state,
-    '| decoded:', allPresetsDecoded(),
-    '| drum:', !!drumPreset, '| bass:', !!bassPreset,
-    '| guitar: KS', '| keys:', !!keysPreset);
+  console.log('[load] startPlayback — ctx:', audioCtx.state,
+    '| drum:', !!drumPreset || !!drumBuffers,
+    '| bass sampler:', !!bassSampler,
+    '| guitar clean:', !!guitarCleanSampler, '| guitar jazz:', !!guitarJazzSampler,
+    '| keys:', !!keysPreset);
 
   const {key, genre, prog, totalBars} = genState;
   const g   = GENRES[genre];
