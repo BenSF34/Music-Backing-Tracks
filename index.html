@@ -59,14 +59,16 @@
     .song-btn:hover { border-color: var(--dim); color: var(--text); }
     .song-btn.active { background: rgba(124,58,237,0.12); border-color: var(--accent); color: var(--glow); font-weight: 600; }
     /* Chord row */
-    .song-source { font-size: 0.72rem; color: var(--muted); margin-bottom: 0.55rem; font-style: italic; }
-    .chord-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.32rem; min-height: 56px; }
+    .song-source { font-size: 0.72rem; color: var(--muted); margin-bottom: 0.65rem; font-style: italic; }
+    /* Lead-sheet chord grid */
+    .chord-grid { display: flex; flex-direction: column; gap: 0.5rem; min-height: 56px; }
     .chord-ph { font-size: 0.78rem; color: var(--muted); font-style: italic; }
-    .chord-chip { display: flex; flex-direction: column; align-items: center; background: var(--surf2); border: 1px solid var(--border); border-radius: 8px; padding: 0.42rem 0.7rem; min-width: 48px; transition: background 0.08s, border-color 0.08s, box-shadow 0.08s, color 0.08s; }
-    .cc-name { font-size: 0.85rem; font-weight: 700; line-height: 1.1; }
-    .cc-bars { font-size: 0.54rem; color: var(--muted); margin-top: 0.18rem; font-weight: 500; }
+    .chord-bar-row { display: grid; grid-template-columns: 1.4rem 1fr 1fr 1fr 1fr; align-items: center; gap: 0.35rem; }
+    .bar-num { font-size: 0.58rem; font-weight: 700; color: var(--muted); opacity: 0.55; text-align: right; user-select: none; padding-right: 0.15rem; }
+    .chord-chip { display: flex; align-items: center; justify-content: center; background: var(--surf2); border: 1px solid var(--border); border-radius: 8px; padding: 0.45rem 0.4rem; transition: background 0.08s, border-color 0.08s, box-shadow 0.08s, color 0.08s; }
+    .cc-name { font-size: 0.85rem; font-weight: 700; line-height: 1; }
     .chord-chip.playing { background: rgba(167,139,250,0.13); border-color: var(--glow); color: var(--glow); box-shadow: 0 0 12px rgba(167,139,250,0.2); }
-    .chord-sep { font-size: 0.62rem; color: var(--border); user-select: none; }
+    .chord-chip.empty { background: transparent; border-color: transparent; pointer-events: none; }
     /* Mixer */
     .mixer-rows { display: flex; flex-direction: column; gap: 0.55rem; }
     .mixer-track { display: grid; grid-template-columns: 80px 1fr 52px; align-items: center; gap: 0.6rem; }
@@ -87,14 +89,45 @@
     .status.loading { color: #facc15; }
     @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
     .loading-pulse { animation: pulse 1.2s ease-in-out infinite; }
+    /* AI card */
+    .ai-row { display: flex; gap: 0.5rem; align-items: flex-start; }
+    .ai-input { flex: 1; background: var(--surf2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 0.85rem; font-family: inherit; padding: 0.55rem 0.7rem; outline: none; resize: none; line-height: 1.4; transition: border-color 0.15s; }
+    .ai-input:focus { border-color: var(--accent); }
+    .ai-input::placeholder { color: var(--muted); }
+    .btn-ai { flex-shrink: 0; background: linear-gradient(135deg, #6d28d9, #2563eb); color: #fff; border: none; border-radius: 8px; padding: 0.55rem 0.95rem; font-size: 0.82rem; font-weight: 700; cursor: pointer; transition: opacity 0.13s; white-space: nowrap; }
+    .btn-ai:hover { opacity: 0.85; }
+    .btn-ai:disabled { opacity: 0.3; cursor: not-allowed; }
+    .ai-result { margin-top: 0.65rem; display: none; }
+    .ai-result.visible { display: block; }
+    .ai-song-name { font-size: 0.82rem; font-weight: 600; color: var(--glow); }
+    .ai-desc { font-size: 0.72rem; color: var(--muted); font-style: italic; margin-top: 0.18rem; }
+    /* Browse examples toggle */
+    .browse-toggle { display: flex; align-items: center; gap: 0.35rem; background: none; border: none; color: var(--muted); font-size: 0.72rem; font-weight: 600; cursor: pointer; padding: 0.15rem 0; margin-top: 0.55rem; transition: color 0.13s; }
+    .browse-toggle:hover { color: var(--text); }
+    .browse-chevron { font-size: 0.58rem; display: inline-block; transition: transform 0.18s; }
+    .browse-toggle.open .browse-chevron { transform: rotate(90deg); }
+    .browse-content { display: none; margin-top: 0.65rem; }
+    .browse-content.open { display: block; }
   </style>
 </head>
 <body>
 <div class="app">
   <header>
     <h1>Backing Track</h1>
-    <p class="subtitle">Pick a genre, choose a song inspiration, generate, play.</p>
+    <p class="subtitle">Describe what you want, or browse example songs below.</p>
   </header>
+
+  <div class="card">
+    <div class="card-title">AI Generator</div>
+    <div class="ai-row">
+      <textarea id="aiPrompt" class="ai-input" rows="2" placeholder="Describe the backing track you want… (e.g. slow bossa nova in A minor, upbeat reggae, bluesy shuffle in E)"></textarea>
+      <button id="aiGenBtn" class="btn-ai">✦ Generate</button>
+    </div>
+    <div id="aiResult" class="ai-result">
+      <div class="ai-song-name" id="aiSongName"></div>
+      <div class="ai-desc" id="aiDesc"></div>
+    </div>
+  </div>
 
   <div class="card">
     <div class="card-title">Settings</div>
@@ -114,22 +147,31 @@
         </div>
       </div>
     </div>
-    <div class="genre-row" id="genreGrid">
-      <button class="genre-btn active" data-genre="jazz">Jazz</button>
-      <button class="genre-btn" data-genre="blues">Blues</button>
-      <button class="genre-btn" data-genre="rock">Rock</button>
-      <button class="genre-btn" data-genre="jamband">Jam Band</button>
-      <button class="genre-btn" data-genre="reggae">Reggae</button>
+  </div>
+
+  <div class="card">
+    <button class="browse-toggle" id="browseToggle" style="margin-top:0">
+      <span class="browse-chevron">▶</span> Browse examples
+    </button>
+    <div class="browse-content" id="browseContent">
+      <div class="genre-row" id="genreGrid" style="margin-top:0.65rem">
+        <button class="genre-btn active" data-genre="jazz">Jazz</button>
+        <button class="genre-btn" data-genre="blues">Blues</button>
+        <button class="genre-btn" data-genre="rock">Rock</button>
+        <button class="genre-btn" data-genre="jamband">Jam Band</button>
+        <button class="genre-btn" data-genre="reggae">Reggae</button>
+      </div>
+      <div class="picker-sep"></div>
+      <div class="picker-label">Song inspiration</div>
+      <div class="song-grid" id="songGrid"></div>
+      <button class="btn btn-gen" id="generateBtn" style="width:100%;margin-top:0.75rem">⚙ Generate</button>
     </div>
-    <div class="picker-sep"></div>
-    <div class="picker-label">Song inspiration</div>
-    <div class="song-grid" id="songGrid"></div>
   </div>
 
   <div class="card">
     <div class="card-title">Chord Progression</div>
     <div class="song-source" id="songSource"></div>
-    <div class="chord-row" id="chordRow">
+    <div class="chord-grid" id="chordRow">
       <span class="chord-ph">Select a song above and click Generate</span>
     </div>
   </div>
@@ -160,8 +202,7 @@
     </div>
   </div>
 
-  <div class="transport">
-    <button class="btn btn-gen" id="generateBtn">⚙ Generate</button>
+  <div class="transport" style="grid-template-columns:1fr">
     <button class="btn btn-play" id="playBtn" disabled>▶ Play</button>
   </div>
   <div class="status" id="status">Select a song and click Generate</div>
@@ -310,6 +351,9 @@ const keyEl   = $('keySelect');
 const bpmSldr = $('bpmSlider'), bpmDisp = $('bpmDisplay');
 const genBtn  = $('generateBtn'), playBtn = $('playBtn'), statEl = $('status');
 const songGrid = $('songGrid'), chordRow = $('chordRow'), songSource = $('songSource');
+const aiGenBtn    = $('aiGenBtn'),    aiPrompt   = $('aiPrompt');
+const aiResult    = $('aiResult'),    aiSongName = $('aiSongName'), aiDesc = $('aiDesc');
+const browseToggle = $('browseToggle'), browseContent = $('browseContent');
 
 // ── BPM slider ─────────────────────────────────────────────────────────────
 bpmSldr.addEventListener('input', () => {
@@ -323,6 +367,20 @@ bpmSldr.addEventListener('input', () => {
     nextEvIdx  = 0;
     nextLoopTime = audioCtx.currentTime + 0.05;
     playStartTime = nextLoopTime;
+  }
+});
+
+// ── Key select ─────────────────────────────────────────────────────────────
+keyEl.addEventListener('change', () => {
+  if (!genState) return;
+  const newKey = keyEl.value;
+  // prog stores key-relative semitone offsets (st), so it transposes automatically.
+  genState.key = newKey;
+  renderChords(genState.prog, genState.song.name, newKey);
+  if (isPlaying) {
+    // Restart playback so MIDI events are rebuilt with the new key.
+    stopPlayback();
+    startPlayback();
   }
 });
 
@@ -388,6 +446,12 @@ function applyGenreVolumes(genre) {
   });
 }
 
+// ── Browse-examples toggle ─────────────────────────────────────────────────
+browseToggle.addEventListener('click', () => {
+  const open = browseContent.classList.toggle('open');
+  browseToggle.classList.toggle('open', open);
+});
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 // Pure-JS MIDI helpers — no Tone.js dependency
 function stMidi(keyNote, semitones, octave) {
@@ -396,6 +460,35 @@ function stMidi(keyNote, semitones, octave) {
 function noteAtSt(keyNote, semitones) {
   return NOTES[(NOTES.indexOf(keyNote) + semitones + 120) % 12];
 }
+// Parse a chord name string (e.g. "Am7", "Cmaj7", "Bb7") into {st, t}
+// relative to the given key note, ready to push into a prog array.
+function parseChordToStep(chordStr, keyNote) {
+  const m = chordStr.trim().match(/^([A-G][#b]?)(.*)/);
+  if (!m) return null;
+  let [, root, qual] = m;
+  const flatMap = {Cb:'B',Db:'C#',Eb:'D#',Fb:'E',Gb:'F#',Ab:'G#',Bb:'A#'};
+  root = flatMap[root] || root;
+  const ri = NOTES.indexOf(root), ki = NOTES.indexOf(keyNote);
+  if (ri === -1 || ki === -1) return null;
+  const st = (ri - ki + 12) % 12;
+  qual = qual.trim();
+  const qmap = {
+    'maj7':'maj7','maj9':'maj9',
+    'm7':'min7','min7':'min7','mi7':'min7','-7':'min7',
+    'm11':'min11','min11':'min11',
+    'm':'min','min':'min','mi':'min','-':'min',
+    '7':'dom7','9':'dom9','13':'dom7',
+    '5':'power',
+    'dim':'min','dim7':'min7','o':'min','ø':'min7',
+    'aug':'maj','+':'maj',
+    'sus2':'maj','sus4':'maj','sus':'maj',
+    'add9':'maj9',
+    '':'maj',
+  };
+  const t = qmap[qual] ?? 'maj';
+  return {st, t};
+}
+
 function buildCNotesMidi(rootMidi, type, lim) {
   return CI[type].slice(0, lim).map(i => rootMidi + i);
 }
@@ -687,26 +780,48 @@ function buildAllEvents(prog, genre, key, bpm, swing) {
 function renderChords(prog, songName, key) {
   chordRow.innerHTML = '';
   songSource.textContent = `Inspired by: ${songName}`;
+
+  // Build a flat list of {label, chipIdx} for every bar.
+  const bars = [];
   let chipIdx = 0;
-  prog.forEach((c, ci) => {
+  prog.forEach(c => {
     const label = noteAtSt(key, c.st) + CSX[c.t];
-    for (let b = 0; b < c.b; b++) {
-      if (chipIdx > 0 && b === 0) {
-        const sep = document.createElement('span');
-        sep.className = 'chord-sep'; sep.textContent = '–';
-        chordRow.appendChild(sep);
-      }
-      const chip = document.createElement('div');
-      chip.className = 'chord-chip'; chip.id = `chip-${chipIdx}`;
-      chip.innerHTML = `<span class="cc-name">${label}</span>`;
-      chordRow.appendChild(chip);
-      chipIdx++;
-    }
+    for (let b = 0; b < c.b; b++) bars.push({label, chipIdx: chipIdx++});
   });
+
+  // Slice into rows of 4 and render each as a grid row.
+  const COLS = 4;
+  for (let r = 0; r < bars.length; r += COLS) {
+    const row = document.createElement('div');
+    row.className = 'chord-bar-row';
+
+    // Bar number label (1-based, left column)
+    const num = document.createElement('span');
+    num.className = 'bar-num';
+    num.textContent = r + 1;
+    row.appendChild(num);
+
+    // Up to 4 chips; pad with empty placeholders to keep grid aligned.
+    for (let col = 0; col < COLS; col++) {
+      const bar = bars[r + col];
+      const chip = document.createElement('div');
+      if (bar) {
+        chip.className = 'chord-chip';
+        chip.id = `chip-${bar.chipIdx}`;
+        chip.innerHTML = `<span class="cc-name">${bar.label}</span>`;
+      } else {
+        chip.className = 'chord-chip empty';
+      }
+      row.appendChild(chip);
+    }
+    chordRow.appendChild(row);
+  }
 }
 
 function setChip(idx) {
-  document.querySelectorAll('.chord-chip').forEach((c,i) => c.classList.toggle('playing', i===idx));
+  document.querySelectorAll('.chord-chip').forEach(c => {
+    c.classList.toggle('playing', c.id === `chip-${idx}`);
+  });
 }
 
 // ── Preset loading helpers ─────────────────────────────────────────────────
@@ -839,24 +954,20 @@ function runScheduler() {
 }
 
 // ── Generate ───────────────────────────────────────────────────────────────
-genBtn.addEventListener('click', async () => {
+// Shared setup + sample-loading used by both the manual Generate button
+// and the AI generator.
+async function generateTrack(key, genre, prog, songName) {
   if (isPlaying) stopPlayback();
 
-  const key   = keyEl.value;
-  const genre = activeGenre;
-  const song  = SONGS[genre][activeSong];
-  const g     = GENRES[genre];
-
-  applyGenreVolumes(genre);
-
-  const prog      = song.prog.map(c => ({...c, name: noteAtSt(key,c.st)+CSX[c.t]}));
+  const g         = GENRES[genre];
   const totalBars = prog.reduce((s,c) => s+c.b, 0);
 
-  genState = {key, genre, song, prog, totalBars};
+  applyGenreVolumes(genre);
+  genState = {key, genre, song: {name: songName}, prog, totalBars};
 
-  renderChords(prog, song.name, key);
+  renderChords(prog, songName, key);
   playBtn.disabled = false;
-  statEl.textContent = `${g.name} · "${song.name}" · ${key} · ${totalBars} bars — loading samples…`;
+  statEl.textContent = `${g.name} · "${songName}" · ${key} · ${totalBars} bars — loading samples…`;
   statEl.className = 'status loading loading-pulse';
 
   // Create AudioContext on first user gesture
@@ -951,8 +1062,114 @@ genBtn.addEventListener('click', async () => {
   console.log('[WAF] All zones decoded. allPresetsDecoded()=', allPresetsDecoded());
 
   if (genState && !isPlaying) {
-    statEl.textContent = `${g.name} · "${song.name}" · ${key} · ${totalBars} bars — ready`;
+    statEl.textContent = `${g.name} · "${songName}" · ${key} · ${totalBars} bars — ready`;
     statEl.className = 'status';
+  }
+}
+
+genBtn.addEventListener('click', () => {
+  const key  = keyEl.value;
+  const genre = activeGenre;
+  const song  = SONGS[genre][activeSong];
+  const prog  = song.prog.map(c => ({...c}));
+  generateTrack(key, genre, prog, song.name);
+});
+
+// ── AI Generator ───────────────────────────────────────────────────────────
+aiGenBtn.addEventListener('click', async () => {
+  const prompt = aiPrompt.value.trim();
+  if (!prompt) { aiPrompt.focus(); return; }
+
+  aiGenBtn.disabled = true;
+  aiGenBtn.textContent = '…';
+  statEl.textContent = 'Asking AI for chord progression…';
+  statEl.className = 'status loading loading-pulse';
+  aiResult.classList.remove('visible');
+
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': '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',
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true',
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 1000,
+        messages: [{
+          role: 'user',
+          content: `The user wants a backing track described as: "${prompt}"
+
+Respond with ONLY a JSON object, no other text:
+{
+  "songName": "Name of a real or fictional song that fits",
+  "artist": "Artist name (real or fictional)",
+  "genre": "jazz|blues|rock|jamband|reggae",
+  "key": "C|C#|D|D#|E|F|F#|G|G#|A|A#|B",
+  "bpm": 120,
+  "chords": [
+    {"chord": "Am7", "bars": 2},
+    {"chord": "Dm7", "bars": 2},
+    {"chord": "G7", "bars": 2},
+    {"chord": "Cmaj7", "bars": 2}
+  ],
+  "description": "One sentence describing the vibe"
+}`
+        }]
+      })
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err?.error?.message || `HTTP ${res.status}`);
+    }
+
+    const json = await res.json();
+    let raw = json.content?.[0]?.text ?? '';
+    // Strip markdown code fences if Claude wrapped the JSON
+    raw = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+    const data = JSON.parse(raw);
+
+    // Validate and normalise fields
+    const key   = NOTES.includes(data.key) ? data.key : 'C';
+    const genre = ['jazz','blues','rock','jamband','reggae'].includes(data.genre) ? data.genre : 'jazz';
+    const bpm   = Math.max(50, Math.min(200, +data.bpm || 120));
+
+    const prog = (data.chords || [])
+      .map(({chord, bars}) => {
+        const step = parseChordToStep(chord, key);
+        return step ? {...step, b: Math.max(1, +bars || 1)} : null;
+      })
+      .filter(Boolean);
+
+    if (!prog.length) throw new Error('AI returned no usable chords.');
+
+    // Update key + BPM UI controls
+    keyEl.value = key;
+    bpmSldr.value = bpm;
+    bpmDisp.textContent = bpm;
+
+    // Update active genre so the drum/bass/guitar patterns match
+    activeGenre = genre;
+    document.querySelectorAll('.genre-btn').forEach(b =>
+      b.classList.toggle('active', b.dataset.genre === genre));
+
+    // Show AI result info
+    aiSongName.textContent = `♪ ${data.songName}${data.artist ? ' — ' + data.artist : ''}`;
+    aiDesc.textContent = data.description || '';
+    aiResult.classList.add('visible');
+
+    await generateTrack(key, genre, prog, data.songName);
+
+  } catch(e) {
+    console.error('[AI] generateTrack failed:', e);
+    statEl.textContent = `AI error: ${e.message}`;
+    statEl.className = 'status loading';
+  } finally {
+    aiGenBtn.disabled = false;
+    aiGenBtn.textContent = '✦ Generate';
   }
 });
 
