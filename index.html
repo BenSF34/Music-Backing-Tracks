@@ -1185,6 +1185,9 @@ genBtn.addEventListener('click', () => {
 });
 
 // ── AI Generator ───────────────────────────────────────────────────────────
+aiPrompt.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); aiGenBtn.click(); }
+});
 aiGenBtn.addEventListener('click', async () => {
   const prompt = aiPrompt.value.trim();
   if (!prompt) { aiPrompt.focus(); return; }
