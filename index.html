@@ -350,8 +350,8 @@ let wafPlayer = null;
 let drumPreset = null, keysPreset = null;
 // Fallback drum buffers loaded from Tone.js samples when WAF drum preset fails
 let drumBuffers = null; // { kick, snare, hihat, open } AudioBuffer map
-// Gleitz soundfont samplers: { buffers: Map<midi, AudioBuffer>, sortedMidis: int[] }
-let bassSampler = null, guitarCleanSampler = null, guitarJazzSampler = null;
+// Local mp3 samplers: { buffers: Map<midi, AudioBuffer>, sortedMidis: int[] }
+let bassSampler = null, guitarSampler = null;
 
 // Mixer gain nodes (created fresh each Play, released each Stop)
 let drumGain = null, bassGain = null, guitarGain = null, keysGain = null;
@@ -621,41 +621,23 @@ function clampGuitar(m) {
   return m;
 }
 
-// ── Gleitz soundfont sampler helpers ──────────────────────────────────────
+// ── Local mp3 sampler helpers ──────────────────────────────────────────────
 
-// Convert a gleitz note name (e.g. "C#4", "Bb3", "A0") to MIDI number.
-function noteNameToMidi(name) {
-  const m = name.match(/^([A-G])([#b]?)(-?\d+)$/);
-  if (!m) return null;
-  const [, letter, acc, octStr] = m;
-  const base  = {C:0,D:2,E:4,F:5,G:7,A:9,B:11}[letter];
-  const shift = acc === '#' ? 1 : acc === 'b' ? -1 : 0;
-  return (parseInt(octStr) + 1) * 12 + base + shift;
-}
-
-// Decode a gleitz MIDI.Soundfont.* object into a sampler map.
-// Loads only notes whose MIDI number falls within [midiMin, midiMax].
-async function loadGleitzSoundfont(sfObj, midiMin, midiMax) {
-  const toLoad = Object.entries(sfObj)
-    .map(([name, uri]) => [noteNameToMidi(name), uri])
-    .filter(([midi]) => midi !== null && midi >= midiMin && midi <= midiMax);
-
-  if (!toLoad.length) {
-    console.warn('[sampler] No notes in MIDI range', midiMin, '-', midiMax);
-    return null;
-  }
-
-  const decoded = await Promise.all(toLoad.map(([midi, uri]) =>
-    fetch(uri)
-      .then(r => r.arrayBuffer())
+// Load an array of [midiNumber, url] pairs into a sampler map.
+// Each file is fetched, decoded, and stored by its exact MIDI pitch.
+async function loadLocalSampler(midiUrlPairs) {
+  const decoded = await Promise.all(midiUrlPairs.map(([midi, url]) =>
+    fetch(url)
+      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.arrayBuffer(); })
       .then(ab => audioCtx.decodeAudioData(ab))
       .then(buf => [midi, buf])
-      .catch(e => { console.warn('[sampler] decode failed for MIDI', midi, e); return null; })
+      .catch(e => { console.warn('[sampler] Failed to load', url, '—', e.message); return null; })
   ));
 
   const buffers     = new Map(decoded.filter(Boolean));
   const sortedMidis = [...buffers.keys()].sort((a, b) => a - b);
-  console.log('[sampler] Ready —', buffers.size, 'samples, MIDI',
+  if (!buffers.size) { console.error('[sampler] No samples loaded — sampler disabled'); return null; }
+  console.log('[sampler] Ready —', buffers.size, '/', midiUrlPairs.length, 'samples | MIDI',
     sortedMidis[0], '–', sortedMidis[sortedMidis.length - 1]);
   return { buffers, sortedMidis };
 }
@@ -920,7 +902,7 @@ function decodePreset(preset) {
 }
 
 // Returns true when WAF drum and keys presets are fully decoded.
-// Bass and guitar use gleitz samplers which load independently.
+// Bass and guitar use local mp3 samplers which load independently.
 function allPresetsDecoded() {
   const ok = p => !p || (p.zones && p.zones.every(z => z.buffer));
   const drumReady = drumBuffers !== null || ok(drumPreset);
@@ -969,9 +951,8 @@ function scheduleEvent(ev, absTime) {
       if (bassSampler && bassGain) {
         if (!scheduleEvent._bassLogged) {
           scheduleEvent._bassLogged = true;
-          console.log('[bass] First note — gleitz sampler | midi:', ev.midi,
+          console.log('[bass] First note — local sampler | midi:', ev.midi,
             '| dur:', ev.durSec.toFixed(3),
-            '| absTime:', absTime.toFixed(3),
             '| ahead:', (absTime - audioCtx.currentTime).toFixed(3), 's');
         }
         playSamplerNote(bassSampler, ev.midi, absTime, ev.durSec, bassGain);
@@ -982,22 +963,18 @@ function scheduleEvent(ev, absTime) {
         }
       }
       break;
-    case 'guitar': {
-      const genre = genState?.genre;
-      const sampler = (genre === 'jazz' || genre === 'reggae') ? guitarJazzSampler : guitarCleanSampler;
-      if (sampler && guitarGain) {
+    case 'guitar':
+      if (guitarSampler && guitarGain) {
         if (!scheduleEvent._guitarLogged) {
           scheduleEvent._guitarLogged = true;
-          console.log('[guitar] First chord — gleitz sampler | genre:', genre,
+          console.log('[guitar] First chord — local sampler | genre:', genState?.genre,
             '| midis:', ev.midis,
             '| dur:', ev.durSec.toFixed(3),
-            '| absTime:', absTime.toFixed(3),
             '| ahead:', (absTime - audioCtx.currentTime).toFixed(3), 's');
         }
-        ev.midis.forEach(m => playSamplerNote(sampler, m, absTime, ev.durSec, guitarGain));
+        ev.midis.forEach(m => playSamplerNote(guitarSampler, m, absTime, ev.durSec, guitarGain));
       }
       break;
-    }
     case 'keys':
       if (keysPreset && keysGain)
         ev.midis.forEach(m =>
@@ -1050,19 +1027,15 @@ async function generateTrack(key, genre, prog, songName) {
   await audioCtx.resume();
   console.log('[load] AudioContext state after resume:', audioCtx.state);
 
-  // Load WAF presets (drums + keys) and gleitz soundfonts (bass + guitar) in parallel
-  const wafBase    = 'https://surikov.github.io/webaudiofontdata/sound/';
-  const gleitzBase = 'https://gleitz.github.io/midi-js-soundfonts/';
+  // Load WAF presets for drums + keys
+  const wafBase = 'https://surikov.github.io/webaudiofontdata/sound/';
   try {
     await Promise.all([
-      loadScript(wafBase    + '12836_0_JCLive_sf2_file.js'),
-      loadScript(wafBase    + '0000_JCLive_sf2_file.js'),
-      loadScript(gleitzBase + 'FluidR3_GM/electric_bass_finger-mp3.js'),
-      loadScript(gleitzBase + 'MusyngKite/electric_guitar_clean-mp3.js'),
-      loadScript(gleitzBase + 'MusyngKite/electric_guitar_jazz-mp3.js'),
+      loadScript(wafBase + '12836_0_JCLive_sf2_file.js'),
+      loadScript(wafBase + '0000_JCLive_sf2_file.js'),
     ]);
   } catch(e) {
-    console.error('[load] A sample script failed to load:', e);
+    console.error('[load] A WAF preset script failed to load:', e);
   }
 
   // Assign WAF presets — drum bank files sometimes use _drum_ prefix instead of _tone_
@@ -1076,18 +1049,38 @@ async function generateTrack(key, genre, prog, songName) {
     keys: !!keysPreset, keysZones: keysPreset?.zones?.length,
   });
 
-  // Build gleitz samplers (skipped if already loaded from a previous generateTrack call)
-  if (!bassSampler && window.MIDI?.Soundfont?.electric_bass_finger) {
-    bassSampler = await loadGleitzSoundfont(window.MIDI.Soundfont.electric_bass_finger, 20, 60);
-    console.log('[bass] gleitz sampler ready:', !!bassSampler);
+  // Load local mp3 samplers for bass and guitar (skipped on subsequent generateTrack calls).
+  // MIDI numbers are exact pitches of each recorded sample; playbackRate shifts the rest.
+  if (!bassSampler) {
+    // E1=28, G1=31, A#1=34, C#2=37, E2=40, G2=43, A#2=46, C#3=49, E3=52
+    bassSampler = await loadLocalSampler([
+      [28, '/samples/bass/E1.mp3'],
+      [31, '/samples/bass/G1.mp3'],
+      [34, '/samples/bass/As1.mp3'],
+      [37, '/samples/bass/Cs2.mp3'],
+      [40, '/samples/bass/E2.mp3'],
+      [43, '/samples/bass/G2.mp3'],
+      [46, '/samples/bass/As2.mp3'],
+      [49, '/samples/bass/Cs3.mp3'],
+      [52, '/samples/bass/E3.mp3'],
+    ]);
+    console.log('[bass] local sampler ready:', !!bassSampler);
   }
-  if (!guitarCleanSampler && window.MIDI?.Soundfont?.electric_guitar_clean) {
-    guitarCleanSampler = await loadGleitzSoundfont(window.MIDI.Soundfont.electric_guitar_clean, 36, 84);
-    console.log('[guitar clean] gleitz sampler ready:', !!guitarCleanSampler);
-  }
-  if (!guitarJazzSampler && window.MIDI?.Soundfont?.electric_guitar_jazz) {
-    guitarJazzSampler = await loadGleitzSoundfont(window.MIDI.Soundfont.electric_guitar_jazz, 36, 84);
-    console.log('[guitar jazz] gleitz sampler ready:', !!guitarJazzSampler);
+  if (!guitarSampler) {
+    // E2=40, F#2=42, A2=45, D#3=51, F#3=54, A3=57, D#4=63, F#4=66, A4=69, C5=72
+    guitarSampler = await loadLocalSampler([
+      [40, '/samples/guitar/E2.mp3'],
+      [42, '/samples/guitar/Fs2.mp3'],
+      [45, '/samples/guitar/A2.mp3'],
+      [51, '/samples/guitar/Ds3.mp3'],
+      [54, '/samples/guitar/Fs3.mp3'],
+      [57, '/samples/guitar/A3.mp3'],
+      [63, '/samples/guitar/Ds4.mp3'],
+      [66, '/samples/guitar/Fs4.mp3'],
+      [69, '/samples/guitar/A4.mp3'],
+      [72, '/samples/guitar/C5.mp3'],
+    ]);
+    console.log('[guitar] local sampler ready:', !!guitarSampler);
   }
 
   // If WAF drum preset failed to decode any zones, fall back to Tone.js samples
@@ -1130,7 +1123,7 @@ async function generateTrack(key, genre, prog, songName) {
   }
 
   console.log('[load] allPresetsDecoded()=', allPresetsDecoded(),
-    '| bass:', !!bassSampler, '| guitarClean:', !!guitarCleanSampler, '| guitarJazz:', !!guitarJazzSampler);
+    '| bass:', !!bassSampler, '| guitar:', !!guitarSampler);
 
   if (genState && !isPlaying) {
     statEl.textContent = `${g.name} · "${songName}" · ${key} · ${totalBars} bars — ready`;
@@ -1265,7 +1258,7 @@ async function startPlayback() {
 
   console.log('[play] startPlayback — ctx:', audioCtx.state,
     '| drum:', !!drumPreset || !!drumBuffers,
-    '| bass:', !!bassSampler, '| guitarClean:', !!guitarCleanSampler, '| guitarJazz:', !!guitarJazzSampler,
+    '| bass:', !!bassSampler, '| guitar:', !!guitarSampler,
     '| keys:', !!keysPreset);
 
   const {key, genre, prog, totalBars} = genState;
