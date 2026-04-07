@@ -149,8 +149,8 @@
       </div>
       <div class="mixer-track">
         <div class="mixer-label"><span class="mix-icon">🎵</span>Guitar</div>
-        <input type="range" id="guitarVol" min="-40" max="0" step="1" value="-16">
-        <span class="mixer-val" id="guitarVolVal">-16 dB</span>
+        <input type="range" id="guitarVol" min="-40" max="0" step="1" value="-6">
+        <span class="mixer-val" id="guitarVolVal">-6 dB</span>
       </div>
       <div class="mixer-track">
         <div class="mixer-label"><span class="mix-icon">🎹</span>Keys</div>
@@ -264,34 +264,34 @@ const GENRES = {
   jazz: {
     name:'Jazz', bpm:120, swing:0.5,
     drums:{ kick:[1,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0], snare:[0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0], hihat:[1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0], open:[0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0] },
-    defaultVols:{ drums:-10, bass:-14, guitar:-28, keys:-4 },
+    defaultVols:{ drums:-10, bass:-14, guitar:-8, keys:-4 },
   },
   blues: {
     name:'Blues', bpm:80, swing:0.5,
     drums:{ kick:[1,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0], snare:[0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0], hihat:[1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0], open:[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0] },
-    defaultVols:{ drums:-10, bass:-14, guitar:-14, keys:-6 },
+    defaultVols:{ drums:-10, bass:-14, guitar:-6, keys:-6 },
   },
   rock: {
     name:'Rock', bpm:120, swing:0,
     drums:{ kick:[1,0,0,0,0,0,1,0,1,0,0,0,0,0,0,0], snare:[0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0], hihat:[1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0], open:[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0] },
-    defaultVols:{ drums:-8, bass:-12, guitar:-10, keys:-10 },
+    defaultVols:{ drums:-8, bass:-12, guitar:-4, keys:-10 },
   },
   jamband: {
     name:'Jam Band', bpm:95, swing:0.15,
     drums:{ kick:[1,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0], snare:[0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0], hihat:[1,0,1,0,0,0,1,0,1,0,0,0,0,0,1,0], open:[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0] },
-    defaultVols:{ drums:-12, bass:-14, guitar:-16, keys:-4 },
+    defaultVols:{ drums:-12, bass:-14, guitar:-6, keys:-4 },
   },
   reggae: {
     name:'Reggae', bpm:88, swing:0,
     drums:{ kick:[0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0], snare:[0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0], hihat:[0,0,1,0,0,0,1,0,0,0,1,0,0,0,1,0], open:[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0] },
-    defaultVols:{ drums:-10, bass:-12, guitar:-12, keys:-6 },
+    defaultVols:{ drums:-10, bass:-12, guitar:-6, keys:-6 },
   },
 };
 
 // ── Audio engine ───────────────────────────────────────────────────────────
 let audioCtx  = null;
 let wafPlayer = null;
-let drumPreset = null, bassPreset = null, guitarPreset = null, keysPreset = null;
+let drumPreset = null, bassPreset = null, keysPreset = null;
 // Fallback drum buffers loaded from Tone.js samples when WAF drum preset fails
 let drumBuffers = null; // { kick, snare, hihat, open } AudioBuffer map
 
@@ -473,12 +473,82 @@ function buildBass(prog, genre, key) {
   return ev;
 }
 
+// Keep guitar chord voicing in octave 3-5 (MIDI 40-72) for a natural register.
+function clampGuitar(m) {
+  while (m > 72) m -= 12;
+  while (m < 40) m += 12;
+  return m;
+}
+
+// ── Karplus-Strong plucked string synthesis ────────────────────────────────
+// Pre-computed soft-clip distortion curve for rock tone.
+// ── Guitar: triangle-oscillator synth ─────────────────────────────────────
+// No feedback loops or delay nodes — envelope-only decay, no risk of howling.
+const GUITAR_PARAMS = {
+  jazz:    { cutoff: 1800, dist: false },
+  blues:   { cutoff: 2200, dist: false },
+  rock:    { cutoff: 3000, dist: true  },
+  jamband: { cutoff: 2000, dist: false },
+  reggae:  { cutoff: 1600, dist: false },
+};
+
+// Soft-clip curve for rock (amount 10 = very mild).
+const GUITAR_DIST_CURVE = (() => {
+  const n = 256, k = 10, out = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const x = (i * 2) / n - 1;
+    out[i] = (Math.PI + k) * x / (Math.PI + k * Math.abs(x));
+  }
+  return out;
+})();
+
+// Play one guitar note: triangle osc → lowpass → [waveshaper] → gain envelope → output.
+// ADSR: attack 2 ms, decay 400 ms, sustain 0, release 100 ms.
+// Output capped at 0.2 before hitting the mixer gainNode.
+function playGuitar(freq, absTime, genre, outputNode) {
+  const { cutoff, dist } = GUITAR_PARAMS[genre] ?? GUITAR_PARAMS.jamband;
+
+  const osc = audioCtx.createOscillator();
+  osc.type = 'triangle';
+  osc.frequency.value = freq;
+
+  const lpf = audioCtx.createBiquadFilter();
+  lpf.type            = 'lowpass';
+  lpf.frequency.value = cutoff;
+  lpf.Q.value         = 0.5;
+
+  const shaper = dist ? audioCtx.createWaveShaper() : null;
+  if (shaper) { shaper.curve = GUITAR_DIST_CURVE; shaper.oversample = '2x'; }
+
+  // Gain envelope: 0 → 0.2 in 2 ms, then decay to 0 over 400 ms, release 100 ms.
+  const env = audioCtx.createGain();
+  const t0  = absTime;
+  env.gain.setValueAtTime(0,   t0);
+  env.gain.linearRampToValueAtTime(0.5, t0 + 0.002);  // attack
+  env.gain.exponentialRampToValueAtTime(0.001, t0 + 0.002 + 0.4); // decay to ~0
+  env.gain.linearRampToValueAtTime(0,    t0 + 0.002 + 0.4 + 0.1); // release
+
+  const stopAt = t0 + 0.002 + 0.4 + 0.1 + 0.02; // small buffer past release
+
+  // Graph: osc → lpf → [shaper] → env → outputNode
+  osc.connect(lpf);
+  if (shaper) { lpf.connect(shaper); shaper.connect(env); }
+  else        { lpf.connect(env); }
+  env.connect(outputNode);
+
+  osc.start(absTime);
+  osc.stop(stopAt);
+  osc.onended = () => {
+    try { osc.disconnect(); lpf.disconnect(); shaper?.disconnect(); env.disconnect(); } catch(_) {}
+  };
+}
+
 function buildGuitar(prog, genre, key) {
   const ev = [];
   let bar = 0;
   prog.forEach(c => {
     const rootMidi = stMidi(key, c.st, 3);
-    const cn = buildCNotesMidi(rootMidi, c.t, 3);
+    const cn = buildCNotesMidi(rootMidi, c.t, 3).map(clampGuitar);
     for (let b = 0; b < c.b; b++) {
       switch (genre) {
         case 'jazz': {
@@ -668,7 +738,7 @@ function decodePreset(preset) {
 function allPresetsDecoded() {
   const ok = p => !p || (p.zones && p.zones.every(z => z.buffer));
   const drumReady = drumBuffers !== null || ok(drumPreset);
-  return drumReady && ok(bassPreset) && ok(guitarPreset) && ok(keysPreset);
+  return drumReady && ok(bassPreset) && ok(keysPreset);
 }
 
 // ── Lookahead scheduler ────────────────────────────────────────────────────
@@ -719,9 +789,18 @@ function scheduleEvent(ev, absTime) {
       }
       break;
     case 'guitar':
-      if (guitarPreset && guitarGain)
-        ev.midis.forEach(m =>
-          wafPlayer.queueWaveTable(audioCtx, guitarGain, guitarPreset, absTime, m, ev.durSec, 1.0));
+      if (guitarGain) {
+        if (!scheduleEvent._guitarLogged) {
+          scheduleEvent._guitarLogged = true;
+          console.log('[guitar] First chord — triangle osc | genre:', genState?.genre,
+            '| midis:', ev.midis,
+            '| params:', GUITAR_PARAMS[genState?.genre] ?? GUITAR_PARAMS.jamband);
+        }
+        ev.midis.forEach(m => {
+          const freq = 440 * Math.pow(2, (m - 69) / 12);
+          playGuitar(freq, absTime, genState.genre, guitarGain);
+        });
+      }
       break;
     case 'keys':
       if (keysPreset && keysGain)
@@ -785,7 +864,6 @@ genBtn.addEventListener('click', async () => {
     await Promise.all([
       loadScript(base + '12836_0_JCLive_sf2_file.js'),
       loadScript(base + '0330_Aspirin_sf2_file.js'),
-      loadScript(base + '0270_Aspirin_sf2_file.js'),
       loadScript(base + '0000_JCLive_sf2_file.js'),
     ]);
   } catch(e) {
@@ -795,14 +873,13 @@ genBtn.addEventListener('click', async () => {
   // Assign presets — drum bank files sometimes use _drum_ prefix instead of _tone_
   drumPreset   = window._tone_12836_0_JCLive_sf2_file || window._drum_12836_0_JCLive_sf2_file || drumPreset;
   bassPreset   = window._tone_0330_Aspirin_sf2_file   || bassPreset;
-  guitarPreset = window._tone_0270_Aspirin_sf2_file   || guitarPreset;
   keysPreset   = window._tone_0000_JCLive_sf2_file    || keysPreset;
 
   console.log('[WAF] Presets assigned:', {
-    drum:   !!drumPreset,   drumZones:   drumPreset?.zones?.length,
-    bass:   !!bassPreset,   bassZones:   bassPreset?.zones?.length,
-    guitar: !!guitarPreset, guitarZones: guitarPreset?.zones?.length,
-    keys:   !!keysPreset,   keysZones:   keysPreset?.zones?.length,
+    drum: !!drumPreset, drumZones: drumPreset?.zones?.length,
+    bass: !!bassPreset, bassZones: bassPreset?.zones?.length,
+    keys: !!keysPreset, keysZones: keysPreset?.zones?.length,
+    guitar: 'Karplus-Strong (no preset)',
   });
 
   if (bassPreset) {
@@ -814,7 +891,7 @@ genBtn.addEventListener('click', async () => {
 
   // Explicitly decode all zone buffers — this is the step the WAF loader
   // skips over (it fires waitLoad before decodeAudioData completes).
-  await Promise.all([drumPreset, bassPreset, guitarPreset, keysPreset].map(decodePreset));
+  await Promise.all([drumPreset, bassPreset, keysPreset].map(decodePreset));
 
   if (bassPreset) {
     const decoded = bassPreset.zones?.filter(z => z.buffer).length ?? 0;
@@ -883,7 +960,7 @@ async function startPlayback() {
   console.log('[WAF] startPlayback — ctx:', audioCtx.state,
     '| decoded:', allPresetsDecoded(),
     '| drum:', !!drumPreset, '| bass:', !!bassPreset,
-    '| guitar:', !!guitarPreset, '| keys:', !!keysPreset);
+    '| guitar: KS', '| keys:', !!keysPreset);
 
   const {key, genre, prog, totalBars} = genState;
   const g   = GENRES[genre];
@@ -893,8 +970,9 @@ async function startPlayback() {
   loopDurSec = totalBars * 4 * (60 / bpm);
   allEvents  = buildAllEvents(prog, genre, key, bpm, g.swing);
 
-  scheduleEvent._drumLogged = false;  // reset per-play first-hit log
-  scheduleEvent._bassLogged = false;
+  scheduleEvent._drumLogged  = false;  // reset per-play first-hit log
+  scheduleEvent._bassLogged  = false;
+  scheduleEvent._guitarLogged = false; // KS: logs first chord params
   // Create and connect mixer gain nodes
   drumGain   = audioCtx.createGain();
   bassGain   = audioCtx.createGain();
