@@ -109,24 +109,88 @@
     .browse-content { display: none; margin-top: 0.65rem; }
     .browse-content.open { display: block; }
     /* API key banner */
-    .api-key-banner { background: var(--surf); border: 1px solid var(--border); border-radius: 14px; padding: 0.75rem 1.25rem; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+    /* Settings icon — fixed bottom-right corner */
+    .settings-icon {
+      position: fixed; bottom: 1rem; right: 1rem; z-index: 100;
+      background: var(--surf2); border: 1px solid var(--border); border-radius: 50%;
+      width: 36px; height: 36px; display: flex; align-items: center; justify-content: center;
+      font-size: 0.95rem; cursor: pointer; color: var(--muted);
+      transition: border-color 0.13s, color 0.13s;
+    }
+    .settings-icon:hover { border-color: var(--accent); color: var(--text); }
+    /* API key banner — hidden by default, shown via JS toggle */
+    .api-key-banner {
+      position: fixed; bottom: 3.2rem; right: 1rem; z-index: 99;
+      background: var(--surf); border: 1px solid var(--border); border-radius: 12px;
+      padding: 0.75rem 1rem; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.5); width: min(320px, calc(100vw - 2rem));
+    }
     .api-key-banner.hidden { display: none; }
     .api-key-label { font-size: 0.72rem; color: var(--muted); white-space: nowrap; }
-    .api-key-input { flex: 1; min-width: 180px; background: var(--surf2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 0.8rem; font-family: monospace; padding: 0.38rem 0.6rem; outline: none; transition: border-color 0.15s; }
+    .api-key-input { flex: 1; min-width: 140px; background: var(--surf2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 0.8rem; font-family: monospace; padding: 0.38rem 0.6rem; outline: none; transition: border-color 0.15s; }
     .api-key-input:focus { border-color: var(--accent); }
     .api-key-input::placeholder { color: var(--muted); font-family: inherit; }
     .btn-api-save { flex-shrink: 0; background: var(--surf2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 0.78rem; font-weight: 600; padding: 0.38rem 0.75rem; cursor: pointer; transition: border-color 0.13s, color 0.13s; white-space: nowrap; }
     .btn-api-save:hover { border-color: var(--accent); color: var(--glow); }
+
+    /* ── Mobile ────────────────────────────────────────────────────────────── */
+    @media (max-width: 600px) {
+      body { padding: 1rem 0.65rem 4rem; }
+
+      h1 { font-size: 1.4rem; }
+      .subtitle { font-size: 0.8rem; }
+
+      .card { padding: 0.9rem 1rem; border-radius: 10px; }
+
+      /* Genre buttons — bigger tap target */
+      .genre-btn {
+        font-size: 0.8rem;
+        padding: 0.55rem 0.85rem;
+        min-height: 44px;
+      }
+
+      /* Song inspiration buttons — full width, taller */
+      .song-btn {
+        font-size: 0.85rem;
+        padding: 0.6rem 0.75rem;
+        min-height: 44px;
+      }
+
+      /* Chord grid — 2 bars per row (bar-num + 2 chips) */
+      .chord-bar-row {
+        grid-template-columns: 1.4rem 1fr 1fr;
+      }
+
+      /* Mixer — label narrower, value column narrower */
+      .mixer-track { grid-template-columns: 70px 1fr 46px; gap: 0.45rem; }
+      .mixer-label { font-size: 0.75rem; }
+      input[type=range] { height: 4px; }
+      input[type=range]::-webkit-slider-thumb { width: 18px; height: 18px; }
+
+      /* AI generator — stack vertically */
+      .ai-row { flex-direction: column; }
+      .ai-input { width: 100%; font-size: 0.9rem; }
+      .btn-ai { width: 100%; min-height: 44px; font-size: 0.88rem; }
+
+      /* Generate button */
+      .btn { min-height: 48px; font-size: 0.92rem; }
+
+      /* API key banner / settings icon */
+      .api-key-banner { bottom: 3.5rem; right: 0.65rem; }
+      .settings-icon { bottom: 0.75rem; right: 0.65rem; }
+      .api-key-input { min-width: 0; }
+    }
   </style>
 </head>
 <body>
-<div class="app">
-  <div class="api-key-banner" id="apiKeyBanner">
-    <span class="api-key-label">Anthropic API key</span>
-    <input type="password" class="api-key-input" id="apiKeyInput" placeholder="sk-ant-…" autocomplete="off" spellcheck="false">
-    <button class="btn-api-save" id="apiKeySave">Save</button>
-  </div>
+<div class="api-key-banner hidden" id="apiKeyBanner">
+  <span class="api-key-label">API key (overrides default)</span>
+  <input type="password" class="api-key-input" id="apiKeyInput" placeholder="sk-ant-…" autocomplete="off" spellcheck="false">
+  <button class="btn-api-save" id="apiKeySave">Save</button>
+</div>
+<button class="settings-icon" id="settingsIcon" title="API key settings">⚙</button>
 
+<div class="app">
   <header>
     <h1>Backing Track</h1>
     <p class="subtitle">Describe what you want, or browse example songs below.</p>
@@ -373,22 +437,21 @@ const aiResult    = $('aiResult'),    aiSongName = $('aiSongName'), aiDesc = $('
 const browseToggle = $('browseToggle'), browseContent = $('browseContent');
 
 // ── API key management ─────────────────────────────────────────────────────
-const apiKeyBanner = $('apiKeyBanner');
-const apiKeyInput  = $('apiKeyInput');
-const apiKeySave   = $('apiKeySave');
+const apiKeyBanner  = $('apiKeyBanner');
+const apiKeyInput   = $('apiKeyInput');
+const apiKeySave    = $('apiKeySave');
+const settingsIcon  = $('settingsIcon');
+
+const FALLBACK_KEY = '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';
 
 function getApiKey() {
-  return localStorage.getItem('anthropic_api_key') || '';
+  return localStorage.getItem('anthropic_api_key') || FALLBACK_KEY;
 }
 
-function applyStoredKey() {
-  const key = getApiKey();
-  if (key) {
-    apiKeyBanner.classList.add('hidden');
-  } else {
-    apiKeyBanner.classList.remove('hidden');
-  }
-}
+settingsIcon.addEventListener('click', () => {
+  apiKeyBanner.classList.toggle('hidden');
+  if (!apiKeyBanner.classList.contains('hidden')) apiKeyInput.focus();
+});
 
 apiKeySave.addEventListener('click', () => {
   const val = apiKeyInput.value.trim();
@@ -398,12 +461,9 @@ apiKeySave.addEventListener('click', () => {
   apiKeyBanner.classList.add('hidden');
 });
 
-// Also save on Enter
 apiKeyInput.addEventListener('keydown', e => {
   if (e.key === 'Enter') apiKeySave.click();
 });
-
-applyStoredKey(); // show or hide on load
 
 // ── BPM slider ─────────────────────────────────────────────────────────────
 bpmSldr.addEventListener('input', () => {
@@ -1193,11 +1253,6 @@ aiGenBtn.addEventListener('click', async () => {
   if (!prompt) { aiPrompt.focus(); return; }
 
   const apiKey = getApiKey();
-  if (!apiKey) {
-    apiKeyBanner.classList.remove('hidden');
-    apiKeyInput.focus();
-    return;
-  }
 
   aiGenBtn.disabled = true;
   aiGenBtn.textContent = '…';
