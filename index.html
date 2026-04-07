@@ -644,7 +644,8 @@ async function loadLocalSampler(midiUrlPairs) {
 
 // Play one note from a sampler: nearest-neighbor sample + playbackRate pitch shift.
 // Envelope: 5 ms attack, sustain until durSec, 40 ms linear release.
-function playSamplerNote(sampler, midi, absTime, durSec, outputNode) {
+// velocity: 0–1 multiplier applied to the envelope peak (default 1).
+function playSamplerNote(sampler, midi, absTime, durSec, outputNode, velocity = 1) {
   if (!sampler?.sortedMidis?.length) return;
 
   // Binary search for nearest MIDI
@@ -666,10 +667,11 @@ function playSamplerNote(sampler, midi, absTime, durSec, outputNode) {
 
   const env = audioCtx.createGain();
   const t0  = absTime;
+  const peak = Math.max(0.01, Math.min(1, velocity)); // clamp 0.01–1
   env.gain.setValueAtTime(0, t0);
-  env.gain.linearRampToValueAtTime(1, t0 + 0.005);            // 5 ms attack
+  env.gain.linearRampToValueAtTime(peak, t0 + 0.005);         // 5 ms attack to velocity peak
   const releaseAt = t0 + Math.max(durSec, 0.05);
-  env.gain.setValueAtTime(1, releaseAt);
+  env.gain.setValueAtTime(peak, releaseAt);
   env.gain.linearRampToValueAtTime(0, releaseAt + 0.04);      // 40 ms release
 
   src.connect(env);
@@ -909,6 +911,10 @@ function allPresetsDecoded() {
   return drumReady && ok(keysPreset);
 }
 
+// ── Humanization helpers ───────────────────────────────────────────────────
+// Returns a random float in [-spread, +spread].
+function jitter(spread) { return (Math.random() * 2 - 1) * spread; }
+
 // ── Lookahead scheduler ────────────────────────────────────────────────────
 const LOOKAHEAD = 0.12; // seconds to schedule ahead
 
@@ -924,8 +930,10 @@ function scheduleEvent(ev, absTime) {
   switch (ev.type) {
     case 'drum': {
       const drumType = ev.midi <= 36 ? 'kick' : ev.midi === 38 || ev.midi === 40 ? 'snare' : ev.midi === 46 ? 'open' : 'hihat';
+      // Hihat velocity varies ±15%; kick and snare stay at full velocity for punch.
+      const drumVel = drumType === 'hihat' ? 1 + jitter(0.15) : 1.0;
       if (drumPreset && drumGain) {
-        wafPlayer.queueWaveTable(audioCtx, drumGain, drumPreset, absTime, ev.midi, ev.durSec, 1.0);
+        wafPlayer.queueWaveTable(audioCtx, drumGain, drumPreset, absTime, ev.midi, ev.durSec, drumVel);
       } else if (drumBuffers && drumGain) {
         const buf = drumBuffers[drumType];
         if (!scheduleEvent._drumLogged) {
@@ -937,7 +945,15 @@ function scheduleEvent(ev, absTime) {
         if (buf) {
           const src = audioCtx.createBufferSource();
           src.buffer = buf;
-          src.connect(drumGain);
+          // Apply hihat velocity via a per-hit gain node
+          if (drumType === 'hihat') {
+            const hitGain = audioCtx.createGain();
+            hitGain.gain.value = drumVel;
+            src.connect(hitGain);
+            hitGain.connect(drumGain);
+          } else {
+            src.connect(drumGain);
+          }
           src.start(absTime);
         } else {
           console.warn('[sched] No buffer for drum type:', drumType, '— drumBuffers keys:', Object.keys(drumBuffers));
@@ -955,7 +971,9 @@ function scheduleEvent(ev, absTime) {
             '| dur:', ev.durSec.toFixed(3),
             '| ahead:', (absTime - audioCtx.currentTime).toFixed(3), 's');
         }
-        playSamplerNote(bassSampler, ev.midi, absTime, ev.durSec, bassGain);
+        // ±15 ms timing jitter, ±20% velocity
+        playSamplerNote(bassSampler, ev.midi, absTime + jitter(0.015), ev.durSec, bassGain,
+          1 + jitter(0.20));
       } else {
         if (!scheduleEvent._bassLogged) {
           scheduleEvent._bassLogged = true;
@@ -972,7 +990,10 @@ function scheduleEvent(ev, absTime) {
             '| dur:', ev.durSec.toFixed(3),
             '| ahead:', (absTime - audioCtx.currentTime).toFixed(3), 's');
         }
-        ev.midis.forEach(m => playSamplerNote(guitarSampler, m, absTime, ev.durSec, guitarGain));
+        // ±15 ms timing jitter per chord; each string gets independent ±20% velocity
+        const chordTime = absTime + jitter(0.015);
+        ev.midis.forEach(m =>
+          playSamplerNote(guitarSampler, m, chordTime, ev.durSec, guitarGain, 1 + jitter(0.20)));
       }
       break;
     case 'keys':
