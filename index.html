@@ -645,6 +645,9 @@ async function loadLocalSampler(midiUrlPairs) {
 // Play one note from a sampler: nearest-neighbor sample + playbackRate pitch shift.
 // Envelope: 5 ms attack, sustain until durSec, 40 ms linear release.
 // velocity: 0–1 multiplier applied to the envelope peak (default 1).
+// ampConfig: optional { inputGain, curve, toneHz } — inserts amp sim before the envelope.
+//   Chain with amp:    src → inputGain → waveshaper → toneFilter → outputGain → env → outputNode
+//   Chain without amp: src → env → outputNode
 function playSamplerNote(sampler, midi, absTime, durSec, outputNode, velocity = 1) {
   if (!sampler?.sortedMidis?.length) return;
 
@@ -665,6 +668,7 @@ function playSamplerNote(sampler, midi, absTime, durSec, outputNode, velocity = 
   src.buffer = buf;
   src.playbackRate.value = Math.pow(2, (midi - nearest) / 12);
 
+  // src → env → outputNode
   const env = audioCtx.createGain();
   const t0  = absTime;
   const peak = Math.max(0.01, Math.min(1, velocity)); // clamp 0.01–1
@@ -990,10 +994,11 @@ function scheduleEvent(ev, absTime) {
             '| dur:', ev.durSec.toFixed(3),
             '| ahead:', (absTime - audioCtx.currentTime).toFixed(3), 's');
         }
-        // ±15 ms timing jitter per chord; each string gets independent ±20% velocity
+        // ±15 ms timing jitter per chord; each string gets independent ±20% velocity.
+        // Base gain 0.8 gives clean dry level; no amp processing.
         const chordTime = absTime + jitter(0.015);
         ev.midis.forEach(m =>
-          playSamplerNote(guitarSampler, m, chordTime, ev.durSec, guitarGain, 1 + jitter(0.20)));
+          playSamplerNote(guitarSampler, m, chordTime, ev.durSec, guitarGain, 0.8 * (1 + jitter(0.20))));
       }
       break;
     case 'keys':
@@ -1073,8 +1078,11 @@ async function generateTrack(key, genre, prog, songName) {
   // Load local mp3 samplers for bass and guitar (skipped on subsequent generateTrack calls).
   // MIDI numbers are exact pitches of each recorded sample; playbackRate shifts the rest.
   if (!bassSampler) {
-    // E1=28, G1=31, A#1=34, C#2=37, E2=40, G2=43, A#2=46, C#3=49, E3=52
+    // All 17 available notes — full nbrosowsky bass-electric library
+    // C#1=25, E1=28, G1=31, A#1=34, C#2=37, E2=40, G2=43, A#2=46,
+    // C#3=49, E3=52, G3=55, A#3=58, C#4=61, E4=64, G4=67, A#4=70, C#5=73
     bassSampler = await loadLocalSampler([
+      [25, '/samples/bass/Cs1.mp3'],
       [28, '/samples/bass/E1.mp3'],
       [31, '/samples/bass/G1.mp3'],
       [34, '/samples/bass/As1.mp3'],
@@ -1084,22 +1092,38 @@ async function generateTrack(key, genre, prog, songName) {
       [46, '/samples/bass/As2.mp3'],
       [49, '/samples/bass/Cs3.mp3'],
       [52, '/samples/bass/E3.mp3'],
+      [55, '/samples/bass/G3.mp3'],
+      [58, '/samples/bass/As3.mp3'],
+      [61, '/samples/bass/Cs4.mp3'],
+      [64, '/samples/bass/E4.mp3'],
+      [67, '/samples/bass/G4.mp3'],
+      [70, '/samples/bass/As4.mp3'],
+      [73, '/samples/bass/Cs5.mp3'],
     ]);
     console.log('[bass] local sampler ready:', !!bassSampler);
   }
   if (!guitarSampler) {
-    // E2=40, F#2=42, A2=45, D#3=51, F#3=54, A3=57, D#4=63, F#4=66, A4=69, C5=72
+    // All 17 available notes — full nbrosowsky guitar-electric library
+    // C#2=37, E2=40, F#2=42, A2=45, C3=48, D#3=51, F#3=54, A3=57,
+    // C4=60, D#4=63, F#4=66, A4=69, C5=72, D#5=75, F#5=78, A5=81, C6=84
     guitarSampler = await loadLocalSampler([
+      [37, '/samples/guitar/Cs2.mp3'],
       [40, '/samples/guitar/E2.mp3'],
       [42, '/samples/guitar/Fs2.mp3'],
       [45, '/samples/guitar/A2.mp3'],
+      [48, '/samples/guitar/C3.mp3'],
       [51, '/samples/guitar/Ds3.mp3'],
       [54, '/samples/guitar/Fs3.mp3'],
       [57, '/samples/guitar/A3.mp3'],
+      [60, '/samples/guitar/C4.mp3'],
       [63, '/samples/guitar/Ds4.mp3'],
       [66, '/samples/guitar/Fs4.mp3'],
       [69, '/samples/guitar/A4.mp3'],
       [72, '/samples/guitar/C5.mp3'],
+      [75, '/samples/guitar/Ds5.mp3'],
+      [78, '/samples/guitar/Fs5.mp3'],
+      [81, '/samples/guitar/A5.mp3'],
+      [84, '/samples/guitar/C6.mp3'],
     ]);
     console.log('[guitar] local sampler ready:', !!guitarSampler);
   }
