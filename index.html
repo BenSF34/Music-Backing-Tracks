@@ -97,6 +97,13 @@
     .btn-ai { flex-shrink: 0; background: linear-gradient(135deg, #6d28d9, #2563eb); color: #fff; border: none; border-radius: 8px; padding: 0.55rem 0.95rem; font-size: 0.82rem; font-weight: 700; cursor: pointer; transition: opacity 0.13s; white-space: nowrap; }
     .btn-ai:hover { opacity: 0.85; }
     .btn-ai:disabled { opacity: 0.3; cursor: not-allowed; }
+    .ai-key-banner { background: rgba(124,58,237,0.07); border: 1px solid var(--dim); border-radius: 8px; padding: 0.7rem 0.8rem; margin-bottom: 0.75rem; }
+    .ai-key-banner.hidden { display: none; }
+    .ai-key-banner-msg { font-size: 0.78rem; color: var(--muted); line-height: 1.5; margin-bottom: 0.5rem; }
+    .ai-key-banner-row { display: flex; gap: 0.5rem; align-items: center; }
+    .ai-key-field { font-family: monospace; font-size: 0.8rem; flex: 1; padding: 0.45rem 0.6rem; }
+    .ai-key-link { color: var(--glow); text-decoration: none; }
+    .ai-key-link:hover { text-decoration: underline; }
     .ai-result { margin-top: 0.65rem; display: none; }
     .ai-result.visible { display: block; }
     .ai-song-name { font-size: 0.82rem; font-weight: 600; color: var(--glow); }
@@ -184,7 +191,7 @@
 </head>
 <body>
 <div class="api-key-banner hidden" id="apiKeyBanner">
-  <span class="api-key-label">API key (overrides default)</span>
+  <span class="api-key-label">Anthropic API key</span>
   <input type="password" class="api-key-input" id="apiKeyInput" placeholder="sk-ant-…" autocomplete="off" spellcheck="false">
   <button class="btn-api-save" id="apiKeySave">Save</button>
 </div>
@@ -198,6 +205,14 @@
 
   <div class="card">
     <div class="card-title">AI Generator</div>
+    <!-- Shown only when no key is saved; hidden once key is set -->
+    <div id="aiKeyBanner" class="ai-key-banner">
+      <div class="ai-key-banner-msg">Enter your <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener" class="ai-key-link">Anthropic API key</a> to use AI generation. Browse examples below — no key needed.</div>
+      <div class="ai-key-banner-row">
+        <input type="password" id="aiKeyInput" class="ai-input ai-key-field" placeholder="sk-ant-…" autocomplete="off" spellcheck="false">
+        <button id="aiKeySave" class="btn-ai">Save</button>
+      </div>
+    </div>
     <div class="ai-row">
       <textarea id="aiPrompt" class="ai-input" rows="2" placeholder="Describe the backing track you want… (e.g. slow bossa nova in A minor, upbeat reggae, bluesy shuffle in E)"></textarea>
       <button id="aiGenBtn" class="btn-ai">✦ Generate</button>
@@ -437,33 +452,55 @@ const aiResult    = $('aiResult'),    aiSongName = $('aiSongName'), aiDesc = $('
 const browseToggle = $('browseToggle'), browseContent = $('browseContent');
 
 // ── API key management ─────────────────────────────────────────────────────
-const apiKeyBanner  = $('apiKeyBanner');
-const apiKeyInput   = $('apiKeyInput');
-const apiKeySave    = $('apiKeySave');
-const settingsIcon  = $('settingsIcon');
-
-const FALLBACK_KEY = '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';
+const settingsIcon   = $('settingsIcon');
+// Corner banner (for updating key after it's already set)
+const apiKeyBanner   = $('apiKeyBanner');
+const apiKeyInput    = $('apiKeyInput');
+const apiKeySave     = $('apiKeySave');
+// Inline banner inside AI card (shown only when no key is saved)
+const aiKeyBanner    = $('aiKeyBanner');
+const aiKeyInput     = $('aiKeyInput');
+const aiKeySave      = $('aiKeySave');
 
 function getApiKey() {
-  return localStorage.getItem('anthropic_api_key') || FALLBACK_KEY;
+  return localStorage.getItem('anthropic_api_key') || '';
 }
 
+function applyKeyState() {
+  const hasKey = !!getApiKey();
+  aiKeyBanner.classList.toggle('hidden', hasKey);
+}
+
+function saveKey(val) {
+  if (!val) return;
+  localStorage.setItem('anthropic_api_key', val);
+  applyKeyState();
+}
+
+// Inline banner save
+aiKeySave.addEventListener('click', () => {
+  saveKey(aiKeyInput.value.trim());
+  aiKeyInput.value = '';
+});
+aiKeyInput.addEventListener('keydown', e => { if (e.key === 'Enter') aiKeySave.click(); });
+
+// Corner settings icon — toggle corner banner to update existing key
 settingsIcon.addEventListener('click', () => {
   apiKeyBanner.classList.toggle('hidden');
   if (!apiKeyBanner.classList.contains('hidden')) apiKeyInput.focus();
 });
 
+// Corner banner save
 apiKeySave.addEventListener('click', () => {
   const val = apiKeyInput.value.trim();
   if (!val) return;
-  localStorage.setItem('anthropic_api_key', val);
+  saveKey(val);
   apiKeyInput.value = '';
   apiKeyBanner.classList.add('hidden');
 });
+apiKeyInput.addEventListener('keydown', e => { if (e.key === 'Enter') apiKeySave.click(); });
 
-apiKeyInput.addEventListener('keydown', e => {
-  if (e.key === 'Enter') apiKeySave.click();
-});
+applyKeyState(); // show inline banner if no key on load
 
 // ── BPM slider ─────────────────────────────────────────────────────────────
 bpmSldr.addEventListener('input', () => {
@@ -1253,12 +1290,21 @@ aiGenBtn.addEventListener('click', async () => {
   if (!prompt) { aiPrompt.focus(); return; }
 
   const apiKey = getApiKey();
+  if (!apiKey) {
+    statEl.textContent = 'Enter an API key above to use AI generation';
+    statEl.className = 'status';
+    aiKeyBanner.classList.remove('hidden');
+    aiKeyInput.focus();
+    return;
+  }
 
   aiGenBtn.disabled = true;
   aiGenBtn.textContent = '…';
   statEl.textContent = 'Asking AI for chord progression…';
   statEl.className = 'status loading loading-pulse';
   aiResult.classList.remove('visible');
+
+  console.log('[AI] Using key starting with:', apiKey.slice(0, 10));
 
   try {
     const res = await fetch('https://api.anthropic.com/v1/messages', {
