@@ -630,8 +630,13 @@ function buildKeys(prog, genre, key) {
 
 function buildHL(prog) {
   const ev = [];
-  let bar = 0;
-  prog.forEach((c, idx) => { ev.push({time:p(bar,0), idx}); bar += c.b; });
+  let bar = 0, chipIdx = 0;
+  prog.forEach(c => {
+    for (let b = 0; b < c.b; b++) {
+      ev.push({time: p(bar, 0), idx: chipIdx});
+      bar++; chipIdx++;
+    }
+  });
   return ev;
 }
 
@@ -682,17 +687,21 @@ function buildAllEvents(prog, genre, key, bpm, swing) {
 function renderChords(prog, songName, key) {
   chordRow.innerHTML = '';
   songSource.textContent = `Inspired by: ${songName}`;
-  prog.forEach((c, i) => {
-    if (i > 0) {
-      const sep = document.createElement('span');
-      sep.className = 'chord-sep'; sep.textContent = '–';
-      chordRow.appendChild(sep);
+  let chipIdx = 0;
+  prog.forEach((c, ci) => {
+    const label = noteAtSt(key, c.st) + CSX[c.t];
+    for (let b = 0; b < c.b; b++) {
+      if (chipIdx > 0 && b === 0) {
+        const sep = document.createElement('span');
+        sep.className = 'chord-sep'; sep.textContent = '–';
+        chordRow.appendChild(sep);
+      }
+      const chip = document.createElement('div');
+      chip.className = 'chord-chip'; chip.id = `chip-${chipIdx}`;
+      chip.innerHTML = `<span class="cc-name">${label}</span>`;
+      chordRow.appendChild(chip);
+      chipIdx++;
     }
-    const chip = document.createElement('div');
-    chip.className = 'chord-chip'; chip.id = `chip-${i}`;
-    chip.innerHTML = `<span class="cc-name">${noteAtSt(key,c.st)}${CSX[c.t]}</span>`
-      + `<span class="cc-bars">${c.b}bar${c.b>1?'s':''}</span>`;
-    chordRow.appendChild(chip);
   });
 }
 
