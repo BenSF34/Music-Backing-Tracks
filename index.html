@@ -523,12 +523,23 @@ if (navigator.maxTouchPoints > 0) {
 }
 
 async function unlockAudio() {
-  // Create AudioContext now if it doesn't exist yet (first gesture)
+  // Must create AudioContext inside a user-gesture handler for mobile browsers
   if (!audioCtx) {
     audioCtx  = new (window.AudioContext || window.webkitAudioContext)();
     wafPlayer = new WebAudioFontPlayer();
   }
+  // Resume in case browser auto-suspended it
   if (audioCtx.state === 'suspended') await audioCtx.resume();
+
+  // iOS requires playing actual audio before the context is truly unlocked.
+  // Play a short silent buffer — this is the standard iOS unlock technique.
+  const silentBuf = audioCtx.createBuffer(1, 1, audioCtx.sampleRate);
+  const silentSrc = audioCtx.createBufferSource();
+  silentSrc.buffer = silentBuf;
+  silentSrc.connect(audioCtx.destination);
+  silentSrc.start(0);
+
+  console.log('[audio unlock] AudioContext state:', audioCtx.state); // should be "running"
   audioUnlockOverlay.classList.add('hidden');
 }
 
