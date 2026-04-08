@@ -97,11 +97,6 @@
     .btn-ai { flex-shrink: 0; background: linear-gradient(135deg, #6d28d9, #2563eb); color: #fff; border: none; border-radius: 8px; padding: 0.55rem 0.95rem; font-size: 0.82rem; font-weight: 700; cursor: pointer; transition: opacity 0.13s; white-space: nowrap; }
     .btn-ai:hover { opacity: 0.85; }
     .btn-ai:disabled { opacity: 0.3; cursor: not-allowed; }
-    .ai-key-banner { background: rgba(124,58,237,0.07); border: 1px solid var(--dim); border-radius: 8px; padding: 0.7rem 0.8rem; margin-bottom: 0.75rem; }
-    .ai-key-banner.hidden { display: none; }
-    .ai-key-banner-msg { font-size: 0.78rem; color: var(--muted); line-height: 1.5; margin-bottom: 0.5rem; }
-    .ai-key-banner-row { display: flex; gap: 0.5rem; align-items: center; }
-    .ai-key-field { font-family: monospace; font-size: 0.8rem; flex: 1; padding: 0.45rem 0.6rem; }
     .ai-key-link { color: var(--glow); text-decoration: none; }
     .ai-key-link:hover { text-decoration: underline; }
     .ai-result { margin-top: 0.65rem; display: none; }
@@ -115,30 +110,23 @@
     .browse-toggle.open .browse-chevron { transform: rotate(90deg); }
     .browse-content { display: none; margin-top: 0.65rem; }
     .browse-content.open { display: block; }
-    /* API key banner */
-    /* Settings icon — fixed bottom-right corner */
-    .settings-icon {
-      position: fixed; bottom: 1rem; right: 1rem; z-index: 100;
-      background: var(--surf2); border: 1px solid var(--border); border-radius: 50%;
-      width: 36px; height: 36px; display: flex; align-items: center; justify-content: center;
-      font-size: 0.95rem; cursor: pointer; color: var(--muted);
-      transition: border-color 0.13s, color 0.13s;
-    }
-    .settings-icon:hover { border-color: var(--accent); color: var(--text); }
-    /* API key banner — hidden by default, shown via JS toggle */
-    .api-key-banner {
-      position: fixed; bottom: 3.2rem; right: 1rem; z-index: 99;
-      background: var(--surf); border: 1px solid var(--border); border-radius: 12px;
-      padding: 0.75rem 1rem; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
-      box-shadow: 0 4px 24px rgba(0,0,0,0.5); width: min(320px, calc(100vw - 2rem));
-    }
-    .api-key-banner.hidden { display: none; }
-    .api-key-label { font-size: 0.72rem; color: var(--muted); white-space: nowrap; }
+    /* API key top banner — shown above AI card when no key is saved */
+    .api-key-top-banner { background: var(--surf); border: 1px solid var(--border); border-radius: 14px; padding: 0.75rem 1.25rem; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+    .api-key-top-banner.hidden { display: none; }
+    .api-key-label { font-size: 0.72rem; color: var(--muted); white-space: nowrap; flex: 0 0 auto; }
     .api-key-input { flex: 1; min-width: 140px; background: var(--surf2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 0.8rem; font-family: monospace; padding: 0.38rem 0.6rem; outline: none; transition: border-color 0.15s; }
     .api-key-input:focus { border-color: var(--accent); }
     .api-key-input::placeholder { color: var(--muted); font-family: inherit; }
     .btn-api-save { flex-shrink: 0; background: var(--surf2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 0.78rem; font-weight: 600; padding: 0.38rem 0.75rem; cursor: pointer; transition: border-color 0.13s, color 0.13s; white-space: nowrap; }
     .btn-api-save:hover { border-color: var(--accent); color: var(--glow); }
+    /* Card title row with change-key link */
+    .card-title-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.75rem; }
+    .card-title-row .card-title { margin-bottom: 0; }
+    .change-key-btn { background: none; border: none; color: var(--muted); font-size: 0.68rem; cursor: pointer; padding: 0; display: flex; align-items: center; gap: 0.2rem; transition: color 0.13s; }
+    .change-key-btn:hover { color: var(--text); }
+    /* Inline key edit row — hidden until change-key-btn clicked */
+    .ai-key-edit { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.65rem; }
+    .ai-key-edit.hidden { display: none; }
 
     /* ── Mobile ────────────────────────────────────────────────────────────── */
     @media (max-width: 600px) {
@@ -182,36 +170,35 @@
       /* Generate button */
       .btn { min-height: 48px; font-size: 0.92rem; }
 
-      /* API key banner / settings icon */
-      .api-key-banner { bottom: 3.5rem; right: 0.65rem; }
-      .settings-icon { bottom: 0.75rem; right: 0.65rem; }
+      /* API key top banner */
+      .api-key-top-banner { padding: 0.65rem 0.85rem; }
       .api-key-input { min-width: 0; }
     }
   </style>
 </head>
 <body>
-<div class="api-key-banner hidden" id="apiKeyBanner">
-  <span class="api-key-label">Anthropic API key</span>
-  <input type="password" class="api-key-input" id="apiKeyInput" placeholder="sk-ant-…" autocomplete="off" spellcheck="false">
-  <button class="btn-api-save" id="apiKeySave">Save</button>
-</div>
-<button class="settings-icon" id="settingsIcon" title="API key settings">⚙</button>
-
 <div class="app">
+  <!-- Shown above AI card when no key is saved; hidden once key is set -->
+  <div class="api-key-top-banner" id="apiKeyTopBanner">
+    <span class="api-key-label">Anthropic API key</span>
+    <input type="password" class="api-key-input" id="apiKeyInput" placeholder="sk-ant-… (get one at console.anthropic.com)" autocomplete="off" spellcheck="false">
+    <button class="btn-api-save" id="apiKeySave">Save</button>
+  </div>
+
   <header>
     <h1>Backing Track</h1>
     <p class="subtitle">Describe what you want, or browse example songs below.</p>
   </header>
 
   <div class="card">
-    <div class="card-title">AI Generator</div>
-    <!-- Shown only when no key is saved; hidden once key is set -->
-    <div id="aiKeyBanner" class="ai-key-banner">
-      <div class="ai-key-banner-msg">Enter your <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener" class="ai-key-link">Anthropic API key</a> to use AI generation. Browse examples below — no key needed.</div>
-      <div class="ai-key-banner-row">
-        <input type="password" id="aiKeyInput" class="ai-input ai-key-field" placeholder="sk-ant-…" autocomplete="off" spellcheck="false">
-        <button id="aiKeySave" class="btn-ai">Save</button>
-      </div>
+    <div class="card-title-row">
+      <div class="card-title">AI Generator</div>
+      <button class="change-key-btn" id="changeKeyBtn">⚙ Change API key</button>
+    </div>
+    <!-- Inline key edit — revealed when "Change API key" is clicked -->
+    <div class="ai-key-edit hidden" id="aiKeyEdit">
+      <input type="password" class="api-key-input" id="aiKeyEditInput" placeholder="sk-ant-…" autocomplete="off" spellcheck="false" style="flex:1">
+      <button class="btn-api-save" id="aiKeyEditSave">Save</button>
     </div>
     <div class="ai-row">
       <textarea id="aiPrompt" class="ai-input" rows="2" placeholder="Describe the backing track you want… (e.g. slow bossa nova in A minor, upbeat reggae, bluesy shuffle in E)"></textarea>
@@ -452,15 +439,15 @@ const aiResult    = $('aiResult'),    aiSongName = $('aiSongName'), aiDesc = $('
 const browseToggle = $('browseToggle'), browseContent = $('browseContent');
 
 // ── API key management ─────────────────────────────────────────────────────
-const settingsIcon   = $('settingsIcon');
-// Corner banner (for updating key after it's already set)
-const apiKeyBanner   = $('apiKeyBanner');
-const apiKeyInput    = $('apiKeyInput');
-const apiKeySave     = $('apiKeySave');
-// Inline banner inside AI card (shown only when no key is saved)
-const aiKeyBanner    = $('aiKeyBanner');
-const aiKeyInput     = $('aiKeyInput');
-const aiKeySave      = $('aiKeySave');
+// Top banner (shown above AI card when no key is saved)
+const apiKeyTopBanner = $('apiKeyTopBanner');
+const apiKeyInput     = $('apiKeyInput');
+const apiKeySave      = $('apiKeySave');
+// Inline edit row inside card (revealed by "Change API key" link)
+const changeKeyBtn    = $('changeKeyBtn');
+const aiKeyEdit       = $('aiKeyEdit');
+const aiKeyEditInput  = $('aiKeyEditInput');
+const aiKeyEditSave   = $('aiKeyEditSave');
 
 function getApiKey() {
   return localStorage.getItem('anthropic_api_key') || '';
@@ -468,7 +455,9 @@ function getApiKey() {
 
 function applyKeyState() {
   const hasKey = !!getApiKey();
-  aiKeyBanner.classList.toggle('hidden', hasKey);
+  apiKeyTopBanner.classList.toggle('hidden', hasKey);
+  // Hide the inline edit row whenever key state changes
+  aiKeyEdit.classList.add('hidden');
 }
 
 function saveKey(val) {
@@ -477,30 +466,27 @@ function saveKey(val) {
   applyKeyState();
 }
 
-// Inline banner save
-aiKeySave.addEventListener('click', () => {
-  saveKey(aiKeyInput.value.trim());
-  aiKeyInput.value = '';
-});
-aiKeyInput.addEventListener('keydown', e => { if (e.key === 'Enter') aiKeySave.click(); });
-
-// Corner settings icon — toggle corner banner to update existing key
-settingsIcon.addEventListener('click', () => {
-  apiKeyBanner.classList.toggle('hidden');
-  if (!apiKeyBanner.classList.contains('hidden')) apiKeyInput.focus();
-});
-
-// Corner banner save
+// Top banner save (first-time setup)
 apiKeySave.addEventListener('click', () => {
-  const val = apiKeyInput.value.trim();
-  if (!val) return;
-  saveKey(val);
+  saveKey(apiKeyInput.value.trim());
   apiKeyInput.value = '';
-  apiKeyBanner.classList.add('hidden');
 });
 apiKeyInput.addEventListener('keydown', e => { if (e.key === 'Enter') apiKeySave.click(); });
 
-applyKeyState(); // show inline banner if no key on load
+// "Change API key" link inside card — toggle inline edit row
+changeKeyBtn.addEventListener('click', () => {
+  const hidden = aiKeyEdit.classList.toggle('hidden');
+  if (!hidden) aiKeyEditInput.focus();
+});
+
+// Inline edit save
+aiKeyEditSave.addEventListener('click', () => {
+  saveKey(aiKeyEditInput.value.trim());
+  aiKeyEditInput.value = '';
+});
+aiKeyEditInput.addEventListener('keydown', e => { if (e.key === 'Enter') aiKeyEditSave.click(); });
+
+applyKeyState(); // show/hide top banner on load
 
 // ── BPM slider ─────────────────────────────────────────────────────────────
 bpmSldr.addEventListener('input', () => {
@@ -1293,8 +1279,8 @@ aiGenBtn.addEventListener('click', async () => {
   if (!apiKey) {
     statEl.textContent = 'Enter an API key above to use AI generation';
     statEl.className = 'status';
-    aiKeyBanner.classList.remove('hidden');
-    aiKeyInput.focus();
+    apiKeyTopBanner.classList.remove('hidden');
+    apiKeyInput.focus();
     return;
   }
 
